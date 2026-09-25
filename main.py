@@ -27,7 +27,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 # ============ إعدادات البوت ============
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8689698569:AAGg6oZqV6f6M-MgUS4SxO8rdkhP53n5e-k')
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8689698569:AAFa3xCwTv5oVMx0WLccZ6p9cdtGNBncnAg')
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
 ADMIN_ID = 6843321125
