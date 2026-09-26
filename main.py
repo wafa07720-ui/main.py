@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PayPal Universal Checker — Telegram Bot (Final v3)
+PayPal Universal Checker — Telegram Bot (Final v4)
 - يدعم كل بوابات PayPal (Commerce/Donations/Standard/Express/PPCP)
 - يدعم Stripe / NMI / Braintree / Square في التصنيف
-- 5 threads للسرعة
+- 3 threads للاستقرار
 - token_timeout = 4
-- حقول forms كاملة (title, full_name, billing, shipping)
+- UNPROCESSABLE_ENTITY = Live
+- يعرض الوصف الكامل من details
 """
 
 import telebot
@@ -173,7 +174,10 @@ PAYPAL_RESPONSES = [
     'PAYER_ACCOUNT_RESTRICTED', 'PAYEE_ACCOUNT_RESTRICTED',
     'PAYMENT_SOURCE_INFO_CANNOT_BE_VERIFIED',
     'PAYMENT_SOURCE_DECLINED_BY_PROCESSOR',
+
+    # ✅ ORDER_NOT_APPROVED + UNPROCESSABLE_ENTITY
     'ORDER_NOT_APPROVED',
+    'UNPROCESSABLE_ENTITY',
     'Payer has not yet approved the Order for payment',
     'Payer has not yet approved',
     'not yet approved',
@@ -318,9 +322,13 @@ DEAD_RESPONSES = [
     'This form has a minimum donation amount',
     'minimum donation amount of',
     'Donation amount',
+    'Donation amount $',
+    'donation amount is invalid',
     'is invalid. Please verify',
     'minimum amount',
     'below minimum',
+    'amount is invalid',
+    'invalid amount',
 ]
 
 ALL_GATEWAY_RESPONSES = (
@@ -786,7 +794,7 @@ class PayPalChecker:
             'last_name': d['last_name'],
             'email': d['email'],
 
-            # ✅ Title / Prefix / Salutation
+            # Title / Prefix / Salutation
             'give_title': 'Mr',
             'title': 'Mr',
             'give_prefix': 'Mr',
@@ -949,14 +957,14 @@ class PayPalChecker:
                         if r.status_code == 200 and r.text:
                             text = r.text.strip()
                             if text and text not in ['0', 'false', 'null', '[]', '{}']:
-                                responses.append(f"[{action} | ${amount}] {text[:200]}")
+                                responses.append(f"[{action} | ${amount}] {text[:250]}")
                             oid = self._find_order_id(text)
                             if oid:
                                 return oid, amount
                     except:
                         continue
         if responses:
-            self._last_response = responses[0]
+            self._last_response = responses[-1]
         return None, None
 
     def confirm_payment_source(self, order_id, card):
@@ -1042,40 +1050,54 @@ class PayPalChecker:
         return None
 
     def analyze_response(self, cj, ct, at):
-        # confirm JSON
+        # ============ confirm JSON ============
         if isinstance(cj, dict):
-            if 'details' in cj and cj['details']:
-                d = cj['details'][0]
+            name = cj.get('name', '')
+            details = cj.get('details', [])
+
+            if details:
+                d = details[0]
                 issue = d.get('issue', '')
                 desc = d.get('description', '')
+
                 if issue == 'ORDER_NOT_APPROVED':
+                    if desc:
+                        return desc
                     return "Payer cannot pay for this transaction."
                 if issue:
                     return f"{issue}: {desc}" if desc else issue
-            if 'name' in cj and cj['name']:
+
+            if name:
                 msg = cj.get('message', '')
-                return f"{cj['name']}: {msg}" if msg else cj['name']
+                return f"{name}: {msg}" if msg else name
             if 'message' in cj and cj['message']:
                 return cj['message']
 
-        # confirm text
+        # ============ confirm text ============
         if ct:
-            # ✅ ORDER_NOT_APPROVED
-            if 'ORDER_NOT_APPROVED' in ct or 'Payer has not yet approved' in ct:
-                return "Payer cannot pay for this transaction."
+            # ✅ استخرج الوصف الكامل
+            descs = re.findall(r'"description"\s*:\s*"([^"]+)"', ct)
+            if descs:
+                for desc in descs:
+                    if 'Payer cannot pay' in desc or 'Payer has not yet approved' in desc:
+                        return desc
+                return descs[0]
 
-            name_m = re.search(r'"name"\s*:\s*"([^"]+)"', ct)
-            if name_m:
-                return name_m.group(1)
             issues = re.findall(r'"issue"\s*:\s*"([^"]+)"', ct)
             if issues:
-                descs = re.findall(r'"description"\s*:\s*"([^"]+)"', ct)
-                return f"{issues[0]}: {descs[0]}" if descs else issues[0]
+                if issues[0] == 'ORDER_NOT_APPROVED':
+                    return "Payer cannot pay for this transaction."
+                return issues[0]
+
+            names = re.findall(r'"name"\s*:\s*"([^"]+)"', ct)
+            if names:
+                return names[0]
+
             msgs = re.findall(r'"message"\s*:\s*"([^"]+)"', ct)
             if msgs:
                 return msgs[0]
 
-        # approve text
+        # ============ approve text ============
         if at:
             t = at.strip()
             if t.lower() == 'true':
@@ -1087,43 +1109,57 @@ class PayPalChecker:
                     if 'error' in j:
                         e = j['error']
                         if isinstance(e, dict):
-                            if 'name' in e:
-                                return str(e['name'])
+                            if 'description' in e:
+                                return str(e['description'])
                             if 'message' in e:
                                 return str(e['message'])
+                            if 'name' in e:
+                                return str(e['name'])
                         elif isinstance(e, str):
                             return e
+
                     if 'data' in j:
                         d = j['data']
                         if isinstance(d, dict):
                             if 'error' in d:
                                 e = d['error']
                                 if isinstance(e, dict):
-                                    if 'name' in e:
-                                        return str(e['name'])
+                                    if 'description' in e:
+                                        return str(e['description'])
                                     if 'message' in e:
                                         return str(e['message'])
+                                    if 'name' in e:
+                                        return str(e['name'])
                                 elif isinstance(e, str):
                                     return e
-                            for k in ['error', 'message', 'msg', 'reason', 'status', 'name']:
-                                if k in d:
-                                    v = d[k]
-                                    if isinstance(v, str):
-                                        return v
+                            for k in ['error', 'message', 'msg', 'reason', 'status', 'name', 'description']:
+                                if k in d and isinstance(d[k], str):
+                                    return d[k]
                         elif isinstance(d, str):
                             return d
+
                     if j.get('success') is True:
                         return "CHARGE"
-                    for k in ['error', 'message', 'msg', 'reason', 'status', 'name']:
+
+                    for k in ['error', 'message', 'msg', 'reason', 'status', 'name', 'description']:
                         if k in j:
                             v = j[k]
                             if isinstance(v, str):
                                 return v
-                            if isinstance(v, dict) and 'name' in v:
-                                return str(v['name'])
+                            if isinstance(v, dict):
+                                if 'description' in v:
+                                    return str(v['description'])
+                                if 'message' in v:
+                                    return str(v['message'])
+                                if 'name' in v:
+                                    return str(v['name'])
             except:
                 pass
 
+            # regex
+            descs = re.findall(r'"description"\s*:\s*"([^"]+)"', t)
+            if descs:
+                return descs[0]
             name_m = re.search(r'"name"\s*:\s*"([^"]+)"', t)
             if name_m:
                 return name_m.group(1)
@@ -1134,7 +1170,7 @@ class PayPalChecker:
             if err_m:
                 return err_m.group(1)
 
-            return t[:200]
+            return t[:300]
 
         return "DECLINED"
 
@@ -1150,7 +1186,7 @@ class PayPalChecker:
                 oid, used_amount = self.create_order()
         if not oid:
             if self._last_response:
-                return f"SERVER: {self._last_response[:250]}", None
+                return f"SERVER: {self._last_response[:300]}", None
             return "No response from server", None
         cj, ct = {}, ""
         if any([self.client_token, self.access_token, self.client_id]):
@@ -1541,7 +1577,7 @@ def cmd_paypal(message):
 ━━━━━━━━━━━━━━━━━━━━
 🔗 Link: <code>{link}</code>
 ━━━━━━━━━━━━━━━━━━━━
-💬 Respons: <code>{result['respons'][:200]}</code>
+💬 Respons: <code>{result['respons'][:250]}</code>
 ━━━━━━━━━━━━━━━━━━━━
 💰 Price = <b>{price_str}</b>
 ━━━━━━━━━━━━━━━━━━━━
@@ -1553,7 +1589,7 @@ Dev: @FAWZY30''')
                     os.remove(file_name)
         else:
             safe_edit_message(message.chat.id, ko.message_id,
-                              f"❌ <b>Dead</b>\n🔗 <code>{link}</code>\n💬 <code>{result['respons'][:200]}</code>")
+                              f"❌ <b>Dead</b>\n🔗 <code>{link}</code>\n💬 <code>{result['respons'][:250]}</code>")
 
     except Exception as e:
         safe_edit_message(message.chat.id, ko.message_id, f"❌ Error: {str(e)[:100]}")
@@ -1678,7 +1714,7 @@ def process_mass_file(message):
         updater = threading.Thread(target=update_status, daemon=True)
         updater.start()
 
-        # ✅ 5 Threads للسرعة
+        # ✅ 3 Threads للاستقرار
         def process_one(args):
             idx, link = args
             try:
@@ -1687,7 +1723,7 @@ def process_mass_file(message):
             except Exception as e:
                 return idx, link, {'live': False, 'respons': str(e)[:100], 'amount': None, 'gateway': None}
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {executor.submit(process_one, (i, l)): i for i, l in enumerate(links)}
 
             for future in as_completed(futures):
@@ -1720,7 +1756,7 @@ def process_mass_file(message):
 ━━━━━━━━━━━━━━━━━━━━
 🔗 Link: <code>{result['link']}</code>
 ━━━━━━━━━━━━━━━━━━━━
-💬 Respons: <code>{result['respons'][:200]}</code>
+💬 Respons: <code>{result['respons'][:250]}</code>
 ━━━━━━━━━━━━━━━━━━━━
 💰 Price = <b>{price_str}</b>
 ━━━━━━━━━━━━━━━━━━━━
@@ -1739,6 +1775,8 @@ Dev: @FAWZY30""")
 
                 if idx % 20 == 0:
                     gc.collect()
+
+                time.sleep(0.3)
 
         with processing_status[user_id]['lock']:
             processing_status[user_id]['done'] = True
@@ -1821,7 +1859,7 @@ if __name__ == '__main__':
         try:
             attempt += 1
             print(f"🔄 Attempt #{attempt} - Starting polling...")
-            bot.polling(none_stop=True, interval=1, timeout=60, long_polling_timeout=60)
+            bot.polling(non_stop=True, interval=1, timeout=60, long_polling_timeout=60)
         except KeyboardInterrupt:
             print('🛑 Bot stopped')
             break
