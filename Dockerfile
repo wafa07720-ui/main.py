@@ -25,32 +25,21 @@ RUN apt-get update && apt-get install -y \
     libpango-1.0-0 \
     libcairo2 \
     libatspi2.0-0 \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# ═══ خطوة 1: نزل + فك في مكان مؤقت ═══
+# ═══ Download + Extract FlareSolverr ═══
 RUN wget -q https://github.com/FlareSolverr/FlareSolverr/releases/download/v3.3.21/flaresolverr_linux_x64.tar.gz \
     && mkdir -p /tmp/fs_extract \
     && tar -xzf flaresolverr_linux_x64.tar.gz -C /tmp/fs_extract \
-    && echo "═══ Content of /tmp/fs_extract ═══" \
-    && ls -la /tmp/fs_extract/ \
-    && echo "═══ Find the binary ═══" \
-    && find /tmp/fs_extract -type f -name "flaresolverr" \
-    && echo "═══ Find all files ═══" \
-    && find /tmp/fs_extract -type f -exec ls -la {} \;
-
-# ═══ خطوة 2: انقلهم لـ /app صح ═══
-RUN FS_BIN=$(find /tmp/fs_extract -type f -name "flaresolverr" | head -1) \
+    && FS_BIN=$(find /tmp/fs_extract -type f -name "flaresolverr" | head -1) \
     && FS_DIR=$(dirname "$FS_BIN") \
-    && echo "Binary found at: $FS_BIN" \
-    && echo "Binary dir: $FS_DIR" \
     && cp -r "$FS_DIR"/* /app/ \
     && rm -rf /tmp/fs_extract flaresolverr_linux_x64.tar.gz \
     && chmod +x /app/flaresolverr \
-    && chmod +x /app/chromedriver 2>/dev/null || true \
-    && echo "═══ Final /app ═══" \
-    && ls -la /app/
+    && chmod +x /app/chromedriver 2>/dev/null || true
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
