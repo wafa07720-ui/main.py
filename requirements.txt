@@ -1,4 +1,1 @@
-selenium
-requests
-urllib3
-webdriver-manager
+curl_cffi
