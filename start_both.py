@@ -3,6 +3,7 @@ import time
 import os
 import sys
 
+
 def start_flaresolverr():
     print("🚀 Starting FlareSolverr...")
     
@@ -16,21 +17,18 @@ def start_flaresolverr():
     print(f"   Size: {st.st_size}")
     print(f"   Mode: {oct(st.st_mode)[-3:]}")
     
-    # ═══ استخدم System Chrome + Driver ═══
     chrome_bin = '/usr/bin/chromium'
     driver_path = '/usr/bin/chromedriver'
     
     print(f"   CHROME_BIN: {chrome_bin}")
     print(f"   CHROMEDRIVER_PATH: {driver_path}")
     
-    # Check Chrome version
     try:
         chrome_version = subprocess.check_output([chrome_bin, '--version'], timeout=5).decode().strip()
         print(f"   Chrome version: {chrome_version}")
     except Exception as e:
         print(f"   ⚠️ Chrome version check failed: {e}")
     
-    # Check driver version
     try:
         driver_version = subprocess.check_output([driver_path, '--version'], timeout=5).decode().strip()
         print(f"   Driver version: {driver_version}")
@@ -45,7 +43,7 @@ def start_flaresolverr():
             stderr=subprocess.PIPE,
             env={
                 **os.environ,
-                'LOG_LEVEL': 'debug',  # ⬅️ debug عشان نشوف التفاصيل
+                'LOG_LEVEL': 'info',
                 'CHROME_BIN': chrome_bin,
                 'CHROMEDRIVER_PATH': driver_path,
                 'PORT': '8191',
