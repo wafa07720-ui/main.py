@@ -1,8 +1,7 @@
 pyTelegramBotAPI
 requests
-beautifulsoup4
-lxml
-urllib3
-user-agent
-requests-toolbelt
 fake-useragent
+urllib3
+playwright
+requests-toolbelt
+user-agent
