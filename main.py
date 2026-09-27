@@ -7,10 +7,6 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-# ═══════════════════════════════════════════════════════════
-# CONFIG
-# ═══════════════════════════════════════════════════════════
-
 FLARESOLVERR_URL = 'http://localhost:8191/v1'
 
 URL = 'https://higherhopesdetroit.org/donation/'
@@ -34,12 +30,7 @@ ZIP = '10001'
 COUNTRY = 'US'
 
 
-# ═══════════════════════════════════════════════════════════
-# STEP 1: Get Page via FlareSolverr
-# ═══════════════════════════════════════════════════════════
-
 def step1_open_page():
-    """فتح الصفحة عبر FlareSolverr - بيتجاوز Cloudflare"""
     print("=" * 60)
     print("STEP 1: Opening page via FlareSolverr")
     print("=" * 60)
@@ -47,7 +38,7 @@ def step1_open_page():
     payload = {
         'cmd': 'request.get',
         'url': URL,
-        'maxTimeout': 60000,  # 60 ثانية
+        'maxTimeout': 60000,
     }
     
     try:
@@ -68,7 +59,6 @@ def step1_open_page():
         
         print(f"📄 HTML Length: {len(html)}")
         print(f"🍪 Cookies: {len(cookies)}")
-        print(f"🔑 User-Agent: {user_agent[:60]}")
         
         html_lower = html.lower()
         
@@ -76,12 +66,10 @@ def step1_open_page():
             return None, "CLOUDFLARE_STILL_ACTIVE"
         
         if 'give-form-id' not in html:
-            print(f"⚠️ No form. First 500: {html[:500]}")
             return None, "NO_GIVE_FORM"
         
         print("✅ Page loaded via FlareSolverr!")
         
-        # Extract form data
         form_id = None
         form_hash = None
         form_prefix = None
@@ -108,7 +96,6 @@ def step1_open_page():
         print(f"✅ Form Prefix: {form_prefix}")
         print(f"✅ Stripe Key: {stripe_key}")
         
-        # Create session with cookies
         session = requests.Session()
         session.verify = False
         
@@ -138,20 +125,11 @@ def step1_open_page():
         return None, f"ERROR: {str(e)[:150]}"
 
 
-# ═══════════════════════════════════════════════════════════
-# STEP 2: Create Stripe PM
-# ═══════════════════════════════════════════════════════════
-
 def step2_create_stripe_pm(data):
-    """إنشاء Stripe Payment Method"""
     print("\n" + "=" * 60)
     print("STEP 2: Creating Stripe PM")
     print("=" * 60)
     
-    # Stripe مش بيقبل pk_ مباشرة لتوليد pm_
-    # لازم Stripe.js في متصفح
-    
-    # محاولة 1: Stripe API مباشرة
     stripe_url = 'https://api.stripe.com/v1/payment_methods'
     
     payload = {
@@ -175,7 +153,6 @@ def step2_create_stripe_pm(data):
         'content-type': 'application/x-www-form-urlencoded',
         'origin': 'https://js.stripe.com',
         'referer': 'https://js.stripe.com/',
-        'user-agent': data['session'].headers.get('user-agent', 'Mozilla/5.0'),
     }
     
     try:
@@ -189,7 +166,6 @@ def step2_create_stripe_pm(data):
             if 'id' in result:
                 return result['id'], "OK"
         
-        # Check error
         try:
             err = response.json()
             if 'error' in err:
@@ -211,12 +187,7 @@ def step2_create_stripe_pm(data):
         return None, f"ERROR: {str(e)[:100]}"
 
 
-# ═══════════════════════════════════════════════════════════
-# STEP 3: Submit Donation
-# ═══════════════════════════════════════════════════════════
-
 def step3_submit_donation(data, pm_id):
-    """إرسال طلب التبرع"""
     print("\n" + "=" * 60)
     print("STEP 3: Submitting donation")
     print("=" * 60)
@@ -265,11 +236,6 @@ def step3_submit_donation(data, pm_id):
         'content-type': 'application/x-www-form-urlencoded',
         'origin': 'https://higherhopesdetroit.org',
         'referer': URL,
-        'sec-fetch-dest': 'document',
-        'sec-fetch-mode': 'navigate',
-        'sec-fetch-site': 'same-origin',
-        'sec-fetch-user': '?1',
-        'upgrade-insecure-requests': '1',
     }
     
     try:
@@ -283,10 +249,6 @@ def step3_submit_donation(data, pm_id):
     except Exception as e:
         return f"ERROR: {str(e)[:100]}"
 
-
-# ═══════════════════════════════════════════════════════════
-# Parse Response
-# ═══════════════════════════════════════════════════════════
 
 def parse_response(text, status_code):
     text_lower = text.lower()
@@ -312,10 +274,6 @@ def parse_response(text, status_code):
         return f"UNKNOWN: {text[:200].strip()}"
     return f"HTTP_{status_code}"
 
-
-# ═══════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════
 
 def run():
     print("🚀 STARTING")
