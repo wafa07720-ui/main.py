@@ -28,15 +28,15 @@ RUN apt-get update && apt-get install -y \
     libatspi2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# ═══ Download FlareSolverr (شكل صح) ═══
-WORKDIR /opt/flaresolverr
+WORKDIR /app
+
+# ═══ Download FlareSolverr في /app ═══
 RUN wget -q https://github.com/FlareSolverr/FlareSolverr/releases/download/v3.3.21/flaresolverr_linux_x64.tar.gz \
     && tar -xzf flaresolverr_linux_x64.tar.gz \
     && rm flaresolverr_linux_x64.tar.gz \
-    && chmod +x flaresolverr \
-    && ls -la /opt/flaresolverr/
-
-WORKDIR /app
+    && chmod +x /app/flaresolverr \
+    && chmod +x /app/chromedriver 2>/dev/null || true \
+    && ls -la /app/
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -44,7 +44,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 ENV CHROME_BIN=/usr/bin/chromium
-ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
+ENV CHROMEDRIVER_PATH=/app/chromedriver
+ENV FLARESOLVERR_PATH=/app/flaresolverr
 ENV PYTHONUNBUFFERED=1
 
 CMD ["python", "-u", "start_both.py"]
