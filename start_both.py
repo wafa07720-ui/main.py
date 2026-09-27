@@ -11,35 +11,34 @@ def start_flaresolverr():
     
     print(f"   Binary: {fs_path}")
     
-    # تحقق من وجود الملف
     if not os.path.exists(fs_path):
         print(f"❌ {fs_path} NOT FOUND")
-        try:
-            print("Content of /app:")
-            for f in os.listdir('/app'):
-                p = os.path.join('/app', f)
-                st = os.stat(p)
-                print(f"   - {f} (mode: {oct(st.st_mode)[-3:]})")
-        except Exception as e:
-            print(f"Error listing: {e}")
         return None
     
-    # معلومات عن الملف
     st = os.stat(fs_path)
     print(f"   Size: {st.st_size}")
     print(f"   Mode: {oct(st.st_mode)[-3:]}")
     
-    # تحقق من قابلية التنفيذ
-    if not os.access(fs_path, os.X_OK):
-        print("❌ Not executable, trying chmod...")
-        try:
-            os.chmod(fs_path, 0o755)
-            print("✅ chmod 755 done")
-        except Exception as e:
-            print(f"❌ chmod failed: {e}")
-            return None
+    # ═══ تأكد من Xvfb ═══
+    xvfb_check = subprocess.run(['which', 'Xvfb'], capture_output=True, text=True)
+    print(f"   Xvfb: {xvfb_check.stdout.strip() or 'NOT FOUND'}")
     
-    # شغل FlareSolverr
+    # ═══ استخدم Chrome اللي جوه FlareSolverr bundle ═══
+    chrome_in_bundle = '/app/chrome/chrome'
+    chromedriver_in_bundle = '/app/chromedriver'
+    
+    if os.path.exists(chrome_in_bundle):
+        print(f"   Using bundled Chrome: {chrome_in_bundle}")
+        chrome_bin = chrome_in_bundle
+    else:
+        chrome_bin = '/usr/bin/chromium'
+        print(f"   Using system Chrome: {chrome_bin}")
+    
+    if os.path.exists(chromedriver_in_bundle):
+        driver_path = chromedriver_in_bundle
+    else:
+        driver_path = '/usr/bin/chromedriver'
+    
     try:
         process = subprocess.Popen(
             [fs_path, '--port', '8191'],
@@ -49,8 +48,9 @@ def start_flaresolverr():
             env={
                 **os.environ,
                 'LOG_LEVEL': 'info',
-                'CHROME_BIN': '/usr/bin/chromium',
-                'CHROMEDRIVER_PATH': '/app/chromedriver',
+                'CHROME_BIN': chrome_bin,
+                'CHROMEDRIVER_PATH': driver_path,
+                'PORT': '8191',
             }
         )
         print(f"✅ FlareSolverr started, PID: {process.pid}")
@@ -62,8 +62,7 @@ def start_flaresolverr():
         return None
 
 
-def wait_flaresolverr(max_wait=90):
-    """استنى FlareSolverr يشتغل"""
+def wait_flaresolverr(max_wait=120):
     import requests
     
     print(f"⏳ Waiting for FlareSolverr (max {max_wait}s)...")
@@ -88,26 +87,23 @@ def wait_flaresolverr(max_wait=90):
 
 
 if __name__ == '__main__':
-    # Start FlareSolverr
     fs_process = start_flaresolverr()
     
     if fs_process is None:
         print("❌ FlareSolverr failed to start")
         sys.exit(1)
     
-    # Wait
     if not wait_flaresolverr():
         print("❌ FlareSolverr didn't respond in time")
         try:
             fs_process.terminate()
             time.sleep(2)
             stdout, stderr = fs_process.communicate(timeout=5)
-            print("STDOUT:", stdout.decode()[:1000])
-            print("STDERR:", stderr.decode()[:1000])
+            print("STDOUT:", stdout.decode()[:3000])
+            print("STDERR:", stderr.decode()[:3000])
         except:
             pass
         sys.exit(1)
     
-    # Start main bot
     print("🚀 Starting Bot...")
     os.execv(sys.executable, [sys.executable, '-u', 'main.py'])
