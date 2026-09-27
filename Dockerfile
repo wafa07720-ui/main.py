@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y \
     libcairo2 \
     libatspi2.0-0 \
     xvfb \
+    x11-utils \
+    x11-xserver-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -38,4 +40,4 @@ ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
 
-CMD ["python", "-u", "main.py"]
+CMD ["python", "-u", "start.py"]
