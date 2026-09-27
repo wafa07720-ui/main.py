@@ -1,107 +1,54 @@
-import subprocess
-import time
-import os
-import sys
+FROM python:3.11-slim
 
-def start_flaresolverr():
-    print("🚀 Starting FlareSolverr...")
-    
-    fs_path = '/app/flaresolverr'
-    
-    if not os.path.exists(fs_path):
-        print(f"❌ {fs_path} NOT FOUND")
-        return None
-    
-    st = os.stat(fs_path)
-    print(f"   Size: {st.st_size}")
-    print(f"   Mode: {oct(st.st_mode)[-3:]}")
-    
-    # ═══ استخدم System Chrome + Driver ═══
-    chrome_bin = '/usr/bin/chromium'
-    driver_path = '/usr/bin/chromedriver'
-    
-    print(f"   CHROME_BIN: {chrome_bin}")
-    print(f"   CHROMEDRIVER_PATH: {driver_path}")
-    
-    # Check Chrome version
-    try:
-        chrome_version = subprocess.check_output([chrome_bin, '--version'], timeout=5).decode().strip()
-        print(f"   Chrome version: {chrome_version}")
-    except Exception as e:
-        print(f"   ⚠️ Chrome version check failed: {e}")
-    
-    # Check driver version
-    try:
-        driver_version = subprocess.check_output([driver_path, '--version'], timeout=5).decode().strip()
-        print(f"   Driver version: {driver_version}")
-    except Exception as e:
-        print(f"   ⚠️ Driver version check failed: {e}")
-    
-    try:
-        process = subprocess.Popen(
-            [fs_path, '--port', '8191'],
-            cwd='/app',
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env={
-                **os.environ,
-                'LOG_LEVEL': 'debug',  # ⬅️ debug عشان نشوف التفاصيل
-                'CHROME_BIN': chrome_bin,
-                'CHROMEDRIVER_PATH': driver_path,
-                'PORT': '8191',
-            }
-        )
-        print(f"✅ FlareSolverr started, PID: {process.pid}")
-        return process
-    except Exception as e:
-        print(f"❌ Failed to start: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+RUN apt-get update && apt-get install -y \
+    wget \
+    curl \
+    unzip \
+    xz-utils \
+    ca-certificates \
+    chromium \
+    chromium-driver \
+    fonts-liberation \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libatspi2.0-0 \
+    xvfb \
+    && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /app
 
-def wait_flaresolverr(max_wait=120):
-    import requests
-    
-    print(f"⏳ Waiting for FlareSolverr (max {max_wait}s)...")
-    
-    for i in range(max_wait):
-        try:
-            r = requests.post('http://localhost:8191/v1', json={
-                'cmd': 'sessions.list'
-            }, timeout=3)
-            if r.status_code == 200:
-                print(f"✅ FlareSolverr ready after {i}s")
-                return True
-        except:
-            pass
-        
-        if i % 15 == 0 and i > 0:
-            print(f"   Still waiting... {i}s")
-        
-        time.sleep(1)
-    
-    return False
+# ═══ Download + Extract FlareSolverr ═══
+RUN wget -q https://github.com/FlareSolverr/FlareSolverr/releases/download/v3.3.21/flaresolverr_linux_x64.tar.gz \
+    && mkdir -p /tmp/fs_extract \
+    && tar -xzf flaresolverr_linux_x64.tar.gz -C /tmp/fs_extract \
+    && FS_BIN=$(find /tmp/fs_extract -type f -name "flaresolverr" | head -1) \
+    && FS_DIR=$(dirname "$FS_BIN") \
+    && cp -r "$FS_DIR"/* /app/ \
+    && rm -rf /tmp/fs_extract flaresolverr_linux_x64.tar.gz \
+    && chmod +x /app/flaresolverr \
+    && chmod +x /app/chromedriver 2>/dev/null || true
 
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-if __name__ == '__main__':
-    fs_process = start_flaresolverr()
-    
-    if fs_process is None:
-        print("❌ FlareSolverr failed to start")
-        sys.exit(1)
-    
-    if not wait_flaresolverr():
-        print("❌ FlareSolverr didn't respond in time")
-        try:
-            fs_process.terminate()
-            time.sleep(2)
-            stdout, stderr = fs_process.communicate(timeout=5)
-            print("STDOUT:", stdout.decode()[:5000])
-            print("STDERR:", stderr.decode()[:5000])
-        except:
-            pass
-        sys.exit(1)
-    
-    print("🚀 Starting Bot...")
-    os.execv(sys.executable, [sys.executable, '-u', 'main.py'])
+COPY . .
+
+ENV CHROME_BIN=/usr/bin/chromium
+ENV CHROMEDRIVER_PATH=/app/chromedriver
+ENV FLARESOLVERR_PATH=/app/flaresolverr
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "-u", "start_both.py"]
