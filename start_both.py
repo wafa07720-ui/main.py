@@ -4,12 +4,9 @@ import os
 import sys
 
 def start_flaresolverr():
-    """شغل FlareSolverr من /app"""
     print("🚀 Starting FlareSolverr...")
     
     fs_path = '/app/flaresolverr'
-    
-    print(f"   Binary: {fs_path}")
     
     if not os.path.exists(fs_path):
         print(f"❌ {fs_path} NOT FOUND")
@@ -19,25 +16,26 @@ def start_flaresolverr():
     print(f"   Size: {st.st_size}")
     print(f"   Mode: {oct(st.st_mode)[-3:]}")
     
-    # ═══ تأكد من Xvfb ═══
-    xvfb_check = subprocess.run(['which', 'Xvfb'], capture_output=True, text=True)
-    print(f"   Xvfb: {xvfb_check.stdout.strip() or 'NOT FOUND'}")
+    # ═══ استخدم System Chrome + Driver ═══
+    chrome_bin = '/usr/bin/chromium'
+    driver_path = '/usr/bin/chromedriver'
     
-    # ═══ استخدم Chrome اللي جوه FlareSolverr bundle ═══
-    chrome_in_bundle = '/app/chrome/chrome'
-    chromedriver_in_bundle = '/app/chromedriver'
+    print(f"   CHROME_BIN: {chrome_bin}")
+    print(f"   CHROMEDRIVER_PATH: {driver_path}")
     
-    if os.path.exists(chrome_in_bundle):
-        print(f"   Using bundled Chrome: {chrome_in_bundle}")
-        chrome_bin = chrome_in_bundle
-    else:
-        chrome_bin = '/usr/bin/chromium'
-        print(f"   Using system Chrome: {chrome_bin}")
+    # Check Chrome version
+    try:
+        chrome_version = subprocess.check_output([chrome_bin, '--version'], timeout=5).decode().strip()
+        print(f"   Chrome version: {chrome_version}")
+    except Exception as e:
+        print(f"   ⚠️ Chrome version check failed: {e}")
     
-    if os.path.exists(chromedriver_in_bundle):
-        driver_path = chromedriver_in_bundle
-    else:
-        driver_path = '/usr/bin/chromedriver'
+    # Check driver version
+    try:
+        driver_version = subprocess.check_output([driver_path, '--version'], timeout=5).decode().strip()
+        print(f"   Driver version: {driver_version}")
+    except Exception as e:
+        print(f"   ⚠️ Driver version check failed: {e}")
     
     try:
         process = subprocess.Popen(
@@ -47,7 +45,7 @@ def start_flaresolverr():
             stderr=subprocess.PIPE,
             env={
                 **os.environ,
-                'LOG_LEVEL': 'info',
+                'LOG_LEVEL': 'debug',  # ⬅️ debug عشان نشوف التفاصيل
                 'CHROME_BIN': chrome_bin,
                 'CHROMEDRIVER_PATH': driver_path,
                 'PORT': '8191',
@@ -99,8 +97,8 @@ if __name__ == '__main__':
             fs_process.terminate()
             time.sleep(2)
             stdout, stderr = fs_process.communicate(timeout=5)
-            print("STDOUT:", stdout.decode()[:3000])
-            print("STDERR:", stderr.decode()[:3000])
+            print("STDOUT:", stdout.decode()[:5000])
+            print("STDERR:", stderr.decode()[:5000])
         except:
             pass
         sys.exit(1)
