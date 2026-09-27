@@ -50,8 +50,7 @@ RUN FS_BIN=$(find /tmp/fs_extract -type f -name "flaresolverr" | head -1) \
     && chmod +x /app/flaresolverr \
     && chmod +x /app/chromedriver 2>/dev/null || true \
     && echo "═══ Final /app ═══" \
-    && ls -la /app/ \
-    && file /app/flaresolverr
+    && ls -la /app/
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
