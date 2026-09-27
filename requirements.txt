@@ -1,4 +1,3 @@
 selenium
-undetected-chromedriver
+webdriver-manager
 requests
-urllib3
