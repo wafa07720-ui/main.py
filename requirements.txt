@@ -2,6 +2,5 @@ pyTelegramBotAPI
 requests
 fake-useragent
 urllib3
-playwright
-requests-toolbelt
-user-agent
+selenium
+webdriver-manager
