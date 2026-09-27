@@ -1,10 +1,11 @@
 FROM python:3.11-slim
 
-# Install Chrome + Python
+# ═══ Dependencies ═══
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
     unzip \
+    xz-utils \
     ca-certificates \
     chromium \
     chromium-driver \
@@ -27,11 +28,13 @@ RUN apt-get update && apt-get install -y \
     libatspi2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Download FlareSolverr
-RUN wget -q https://github.com/FlareSolverr/FlareSolverr/releases/latest/download/flaresolverr_linux_x64.tar.gz \
-    && tar -xzf flaresolverr_linux_x64.tar.gz -C /opt/ \
+# ═══ Download FlareSolverr (شكل صح) ═══
+WORKDIR /opt/flaresolverr
+RUN wget -q https://github.com/FlareSolverr/FlareSolverr/releases/download/v3.3.21/flaresolverr_linux_x64.tar.gz \
+    && tar -xzf flaresolverr_linux_x64.tar.gz \
     && rm flaresolverr_linux_x64.tar.gz \
-    && chmod +x /opt/flaresolverr
+    && chmod +x flaresolverr \
+    && ls -la /opt/flaresolverr/
 
 WORKDIR /app
 
@@ -44,5 +47,4 @@ ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 ENV PYTHONUNBUFFERED=1
 
-# Start both FlareSolverr + Bot
 CMD ["python", "-u", "start_both.py"]
