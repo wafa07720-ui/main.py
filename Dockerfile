@@ -1,6 +1,5 @@
 FROM python:3.11-slim
 
-# تثبيت Chromium + ChromeDriver + Dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -33,7 +32,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Chromium paths
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 
