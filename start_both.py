@@ -13,12 +13,18 @@ def start_flaresolverr():
         print(f"❌ {fs_path} NOT FOUND")
         return None
     
-    st = os.stat(fs_path)
-    print(f"   Size: {st.st_size}")
-    print(f"   Mode: {oct(st.st_mode)[-3:]}")
+    # ═══ استخدم Chrome اللي في bundle ═══
+    chrome_bin = '/app/chrome/chrome'
+    driver_path = '/app/chromedriver'
     
-    chrome_bin = '/usr/bin/chromium'
-    driver_path = '/usr/bin/chromedriver'
+    # تأكد من وجودهم
+    if not os.path.exists(chrome_bin):
+        print(f"❌ {chrome_bin} NOT FOUND, fallback to system")
+        chrome_bin = '/usr/bin/chromium'
+    
+    if not os.path.exists(driver_path):
+        print(f"❌ {driver_path} NOT FOUND, fallback to system")
+        driver_path = '/usr/bin/chromedriver'
     
     print(f"   CHROME_BIN: {chrome_bin}")
     print(f"   CHROMEDRIVER_PATH: {driver_path}")
@@ -43,7 +49,7 @@ def start_flaresolverr():
             stderr=subprocess.PIPE,
             env={
                 **os.environ,
-                'LOG_LEVEL': 'info',
+                'LOG_LEVEL': 'debug',
                 'CHROME_BIN': chrome_bin,
                 'CHROMEDRIVER_PATH': driver_path,
                 'PORT': '8191',
