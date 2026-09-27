@@ -76,7 +76,7 @@ def premium_emoji(text):
     return result
 
 # ═══ Bot Data ═══
-token = '8689698569:AAG65LsvRo_twjo9221L7S-GtX3UZQkTr5M'
+token = '8689698569:AAGRy3j9Ln3YXccd05G5I6Otq95yrz_sP60'
 bot = telebot.TeleBot(token, parse_mode="HTML")
 admin = 6843321125
 admins = ['6843321125']
