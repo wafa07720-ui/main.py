@@ -57,7 +57,6 @@ ADDRESSES = [
 # RESPONSE MAPPING
 # ═══════════════════════════════════════════════════════════
 
-# ═══ Mapping من reason (API) لكود قصير ═══
 REASON_MAP = {
     # ═══ Live ═══
     'InsufficientFunds': 'INSUFFICIENT_FUNDS',
@@ -84,6 +83,7 @@ REASON_MAP = {
     'CardDeclined': 'DECLINED',
     'TransactionDeclined': 'DECLINED',
     'PaymentDeclined': 'DECLINED',
+    'CreditCardError': 'DECLINED',
     
     # ═══ Do Not Honor ═══
     'CreditCardDoNotHonor': 'DO_NOT_HONOR',
@@ -120,7 +120,6 @@ REASON_MAP = {
     'TransactionApproved': 'CHARGE 1.0',
 }
 
-# ═══ Fallback: كلمات من النص ═══
 TEXT_PATTERNS = [
     (r"there are insufficient funds[^.]*\.", "INSUFFICIENT_FUNDS"),
     (r"insufficient funds[^.]*\.", "INSUFFICIENT_FUNDS"),
@@ -135,6 +134,7 @@ TEXT_PATTERNS = [
     (r"card was declined[^.]*\.", "DECLINED"),
     (r"transaction was declined[^.]*\.", "DECLINED"),
     (r"payment was declined[^.]*\.", "DECLINED"),
+    (r"payment did not go through[^.]*\.", "DECLINED"),
     (r"do not honor[^.]*\.", "DO_NOT_HONOR"),
     (r"restricted card[^.]*\.", "RESTRICTED_CARD"),
     (r"suspected fraud[^.]*\.", "SUSPECTED_FRAUD"),
@@ -410,6 +410,17 @@ def check_card(browser, card, idx, total):
                         break
                 except:
                     pass
+            
+            # ═══ انتظر شوية قبل ما نقفل الـ context ═══
+            time.sleep(2)
+            
+            # ═══ إعادة تحميل الصفحة قبل إغلاق الـ context ═══
+            print("🔄 Refreshing page before close...", flush=True)
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=30000)
+                time.sleep(2)
+            except:
+                pass
             
             try:
                 context.close()
