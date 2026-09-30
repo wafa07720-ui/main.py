@@ -1,6 +1,6 @@
+python-telegram-bot
 playwright
 requests
 httpx
-python-telegram-bot
 fake-useragent
 requests-toolbelt
