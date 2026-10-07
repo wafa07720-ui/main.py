@@ -1,6 +1,6 @@
 python-telegram-bot
-playwright
 requests
 httpx
 fake-useragent
 requests-toolbelt
+curl_cffi
